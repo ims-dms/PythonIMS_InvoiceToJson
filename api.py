@@ -60,6 +60,7 @@ Extract data from TAX INVOICE document following these strict rules:
    - Extract ALL SKUs from "Description" column
    - Extract SKU codes separately as "sku_code"
    - Extract corresponding numbers from "Quantity", "Shortage", "Breakage", "Leakage", "Batch", "SNO", "Rate", "Discount", "MRP", "VAT", "HSCode", "AltQty", "Unit" columns
+   - HSCode is very important, ensure to extract HSCode values accurately from the invoice
    - Maintain array order consistency across all product-related fields
 
 3. Date Formatting:
@@ -174,9 +175,10 @@ async def process_invoice(file: UploadFile = File(...)):
             if not validate_response_structure(data):
                 raise ValueError("Response missing required fields")
 
+
             data = normalize_arrays(data)
 
-            data['sku'] = data.get('sku_code', [])
+            data['sku'] = data.get('sku', [])
             data['brands'] = [sku.split()[0] if sku else "" for sku in data.get('sku', [])]
 
             products = []
@@ -224,10 +226,13 @@ async def process_invoice(file: UploadFile = File(...)):
                 }
                 products.append(product)
 
+            logger.debug(f"Raw SKU data from Gemini response: {data.get('sku', [])}")
+
             for key in ['sku', 'quantity', 'shortage', 'breakage', 'leakage', 'batch', 'sno', 'rate', 'discount', 'mrp', 'vat', 'brands']:
                 data.pop(key, None)
 
             data['products'] = products
+            data['full_sku_names'] = sku_list
 
             return data
 
