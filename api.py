@@ -57,10 +57,10 @@ Extract data from TAX INVOICE document following these strict rules:
    - Invoice Date → "invoice_date"
 
 2. For product listings:
-   - Extract ALL SKUs from "Description" column
-   - Extract SKU codes separately as "sku_code"
-   - Extract corresponding numbers from "Quantity", "Shortage", "Breakage", "Leakage", "Batch", "SNO", "Rate", "Discount", "MRP", "VAT", "HSCode", "AltQty", "Unit" columns
-   - HSCode is very important, ensure to extract HSCode values accurately from the invoice
+   - Extract ALL SKUs from the "Description" column. It is very important to ensure that Description values are accurately extracted from the invoice.
+   - Extract SKU codes separately as "sku_code". It is very important to ensure that SKU code values are accurately extracted from the invoice.
+   - Extract corresponding numbers from the "Quantity", "Shortage", "Breakage", "Leakage", "Batch", "SNO", "Rate", "Discount", "MRP", "VAT", "HSCode", "AltQty", and "Unit" columns.
+   - HSCode is very important; ensure HSCode values are accurately extracted from the invoice.
    - Maintain array order consistency across all product-related fields
 
 3. Date Formatting:
