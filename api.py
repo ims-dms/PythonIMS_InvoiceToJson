@@ -232,7 +232,10 @@ async def process_invoice(file: UploadFile = File(...)):
                 data.pop(key, None)
 
             data['products'] = products
-            data['full_sku_names'] = sku_list
+
+            # Remove unwanted top-level fields as per user request
+            for key in ['sku_code', 'hscode', 'altQty', 'unit', 'full_sku_names']:
+                data.pop(key, None)
 
             return data
 
