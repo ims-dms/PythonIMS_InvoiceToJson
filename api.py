@@ -12,6 +12,8 @@ from dotenv import load_dotenv
 from pydantic_ai import Agent, BinaryContent
 from pydantic_ai.models.gemini import GeminiModel
 from pydantic_ai.providers.google_gla import GoogleGLAProvider
+from rapidfuzz import process
+from db_connection import get_connection
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -230,6 +232,31 @@ async def process_invoice(file: UploadFile = File(...)):
 
             for key in ['sku', 'quantity', 'shortage', 'breakage', 'leakage', 'batch', 'sno', 'rate', 'discount', 'mrp', 'vat', 'brands']:
                 data.pop(key, None)
+
+            # Connect to DB and fetch desca and mcode list
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT desca, mcode FROM menuitem")
+            menu_items = cursor.fetchall()  # list of tuples (desca, mcode)
+            cursor.close()
+            conn.close()
+
+            desca_list = [item[0] for item in menu_items]
+
+            # For each product, find nearest match from desca_list using RapidFuzz with score cutoff 80
+            for product in products:
+                sku_name = product.get("sku", "")
+                if sku_name:
+                    best_match = process.extractOne(sku_name, desca_list, score_cutoff=80)
+                    if best_match:
+                        matched_desca = best_match[0]
+                        # Find corresponding mcode
+                        matched_mcode = next((item[1] for item in menu_items if item[0] == matched_desca), "")
+                        product["NearMappedItem"] = {"desca": matched_desca, "mcode": matched_mcode}
+                    else:
+                        product["NearMappedItem"] = {"desca": "", "mcode": ""}
+                else:
+                    product["NearMappedItem"] = {"desca": "", "mcode": ""}
 
             data['products'] = products
 
