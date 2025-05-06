@@ -1,0 +1,7 @@
+fastapi
+langchain-core
+python-dotenv
+pydantic-ai
+rapidfuzz
+uvicorn
+pyodbc
