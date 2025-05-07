@@ -5,7 +5,7 @@ import base64
 import logging
 from datetime import datetime
 from io import BytesIO
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.messages import HumanMessage
 from dotenv import load_dotenv
@@ -134,7 +134,14 @@ def normalize_arrays(data: dict) -> dict:
     return data
 
 @app.post("/extract")
-async def process_invoice(file: UploadFile = File(...)):
+async def process_invoice(
+    file: UploadFile = File(...),
+    companyID: str = Form(...),
+    username: str = Form(...),
+    licenceID: str = Form(None)
+):
+    if not companyID or not username:
+        return {"error": "Please provide both companyID and username."}
     try:
         file_content = await file.read()
 
@@ -150,7 +157,9 @@ async def process_invoice(file: UploadFile = File(...)):
         image_base64 = base64.b64encode(file_content).decode('utf-8')
 
         result = await gemini_agent.run([PROCESSING_PROMPT, BinaryContent(file_content, media_type=media_type)])
-        logger.info(f"Gemini processing complete. Usage: {result.usage()}")
+        usage = result.usage()
+        usage_info = f"Gemini processing complete. Usage: {usage}"
+        logger.info(usage_info)
 
         raw_response = str(result.data)
         logger.debug(f"Raw Gemini response: {raw_response}")
@@ -164,6 +173,160 @@ async def process_invoice(file: UploadFile = File(...)):
                     data = json.loads(json_match.group(1))
                 else:
                     raise ValueError("No JSON found in response")
+
+            logger.debug(f"Keys in response data: {list(data.keys())}")
+
+            def normalize_key(k):
+                return k.replace(" ", "").replace("_", "").lower()
+
+            normalized_data = {}
+            for key, value in data.items():
+                normalized_data[normalize_key(key)] = value
+
+            if not validate_response_structure(data):
+                raise ValueError("Response missing required fields")
+
+            data = normalize_arrays(data)
+
+            data['sku'] = data.get('sku', [])
+            data['brands'] = [sku.split()[0] if sku else "" for sku in data.get('sku', [])]
+
+            products = []
+            sku_list = data.get('sku', [])
+            sku_code_list = data.get('sku_code', [])
+            quantity_list = data.get('quantity', [])
+            shortage_list = data.get('shortage', [])
+            breakage_list = data.get('breakage', [])
+            leakage_list = data.get('leakage', [])
+            batch_list = normalized_data.get('batch') or []
+            sno_list = data.get('sno', [])
+            rate_list = normalized_data.get('rate') or []
+            discount_list = data.get('discount', [])
+            mrp_list = normalized_data.get('mrp') or normalized_data.get('mrpvalue') or []
+            vat_list = normalized_data.get('vat') or normalized_data.get('vatvalue') or []
+            hscode_list = normalized_data.get('hscode') or normalized_data.get('hs_code') or []
+            altqty_list = normalized_data.get('altqty') or normalized_data.get('altquantity') or []
+            unit_list = normalized_data.get('unit') or normalized_data.get('unitofmeasure') or normalized_data.get('uom') or []
+
+            max_len = max(
+                len(sku_list), len(sku_code_list), len(quantity_list), len(shortage_list),
+                len(breakage_list), len(leakage_list), len(batch_list),
+                len(sno_list), len(rate_list), len(discount_list),
+                len(mrp_list), len(vat_list), len(hscode_list),
+                len(altqty_list), len(unit_list)
+            )
+
+            for i in range(max_len):
+                product = {
+                    "sku": sku_list[i] if i < len(sku_list) else "",
+                    "sku_code": sku_code_list[i] if i < len(sku_code_list) else "",
+                    "quantity": quantity_list[i] if i < len(quantity_list) else 0,
+                    "shortage": shortage_list[i] if i < len(shortage_list) else 0,
+                    "breakage": breakage_list[i] if i < len(breakage_list) else 0,
+                    "leakage": leakage_list[i] if i < len(leakage_list) else 0,
+                    "batch": batch_list[i] if i < len(batch_list) else "",
+                    "sno": sno_list[i] if i < len(sno_list) else "",
+                    "rate": rate_list[i] if i < len(rate_list) else 0,
+                    "discount": discount_list[i] if i < len(discount_list) else 0,
+                    "mrp": mrp_list[i] if i < len(mrp_list) else 0,
+                    "vat": vat_list[i] if i < len(vat_list) else 0,
+                    "hscode": hscode_list[i] if i < len(hscode_list) else "",
+                    "altQty": altqty_list[i] if i < len(altqty_list) else 0,
+                    "unit": unit_list[i] if i < len(unit_list) else ""
+                }
+                products.append(product)
+
+            logger.debug(f"Raw SKU data from Gemini response: {data.get('sku', [])}")
+
+            for key in ['sku', 'quantity', 'shortage', 'breakage', 'leakage', 'batch', 'sno', 'rate', 'discount', 'mrp', 'vat', 'brands']:
+                data.pop(key, None)
+
+            # Connect to DB and fetch desca and mcode list
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT desca, mcode FROM menuitem")
+            menu_items = cursor.fetchall()  # list of tuples (desca, mcode)
+            cursor.close()
+            conn.close()
+
+            desca_list = [item[0] for item in menu_items]
+
+            # For each product, find nearest match from desca_list using RapidFuzz with score cutoff 80
+            for product in products:
+                sku_name = product.get("sku", "")
+                if sku_name:
+                    best_match = process.extractOne(sku_name, desca_list, score_cutoff=80)
+                    if best_match:
+                        matched_desca = best_match[0]
+                        # Find corresponding mcode
+                        matched_mcode = next((item[1] for item in menu_items if item[0] == matched_desca), "")
+                        product["NearMappedItem"] = {"desca": matched_desca, "mcode": matched_mcode}
+                    else:
+                        product["NearMappedItem"] = {"desca": "", "mcode": ""}
+                else:
+                    product["NearMappedItem"] = {"desca": "", "mcode": ""}
+
+            data['products'] = products
+
+            # Remove unwanted top-level fields
+            for key in ['sku_code', 'hscode', 'altQty', 'unit', 'full_sku_names']:
+                data.pop(key, None)
+
+            # Insert success record in tblOCRTokenDetails
+            from datetime import date, datetime as dt
+            current_date = date.today()
+            current_time = dt.now().time()
+
+            conn = get_connection()
+            cursor = conn.cursor()
+            create_table_sql = """
+            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='tblOCRTokenDetails' AND xtype='U')
+            CREATE TABLE tblOCRTokenDetails (
+                Id INT IDENTITY(1,1) PRIMARY KEY,
+                CompanyId VARCHAR(255),
+                Username VARCHAR(255),
+                LicenceID VARCHAR(255),
+                Requests INT,
+                RequestTokens INT,
+                ResponseTokens INT,
+                TotalTokens INT,
+                Date DATE,
+                Time TIME,
+                Status VARCHAR(50),
+                Remarks VARCHAR(MAX),
+                JSONData VARCHAR(MAX)
+            )
+            """
+            cursor.execute(create_table_sql)
+            insert_sql = """
+            INSERT INTO tblOCRTokenDetails (CompanyId, Username, LicenceID, Requests, RequestTokens, ResponseTokens, TotalTokens, Date, Time, Status, Remarks, JSONData)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
+            cursor.execute(insert_sql, (
+                companyID,
+                username,
+                licenceID,
+                usage.requests,
+                usage.request_tokens,
+                usage.response_tokens,
+                usage.total_tokens,
+                current_date,
+                current_time,
+                "Success",
+                "",
+                json.dumps(data)
+            ))
+            conn.commit()
+            cursor.close()
+            conn.close()
+
+            return data
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.error(f"Processing error: {str(e)}")
+            raise HTTPException(
+                status_code=422,
+                detail=f"Failed to process invoice: {str(e)}"
+            )
 
             logger.debug(f"Keys in response data: {list(data.keys())}")
 
@@ -274,6 +437,53 @@ async def process_invoice(file: UploadFile = File(...)):
             )
 
     except Exception as e:
+        # Insert failure record in tblOCRTokenDetails
+        from datetime import date, datetime as dt
+        current_date = date.today()
+        current_time = dt.now().time()
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+            create_table_sql = """
+            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='tblOCRTokenDetails' AND xtype='U')
+            CREATE TABLE tblOCRTokenDetails (
+                Id INT IDENTITY(1,1) PRIMARY KEY,
+                CompanyId VARCHAR(255),
+                Username VARCHAR(255),
+                LicenceID VARCHAR(255),
+                Requests INT,
+                RequestTokens INT,
+                ResponseTokens INT,
+                TotalTokens INT,
+                Date DATE,
+                Time TIME,
+                Status VARCHAR(50),
+                Remarks VARCHAR(MAX)
+            )
+            """
+            cursor.execute(create_table_sql)
+            insert_sql = """
+            INSERT INTO tblOCRTokenDetails (CompanyId, Username, LicenceID, Requests, RequestTokens, ResponseTokens, TotalTokens, Date, Time, Status, Remarks)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
+            cursor.execute(insert_sql, (
+                companyID,
+                username,
+                licenceID,
+                0,
+                0,
+                0,
+                0,
+                current_date,
+                current_time,
+                "Failure",
+                str(e)
+            ))
+            conn.commit()
+            cursor.close()
+            conn.close()
+        except Exception as ex:
+            logger.error(f"Failed to log failure in tblOCRTokenDetails: {ex}")
         logger.error(f"Unexpected error: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
