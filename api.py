@@ -138,7 +138,8 @@ async def process_invoice(
     file: UploadFile = File(...),
     companyID: str = Form(...),
     username: str = Form(...),
-    licenceID: str = Form(None)
+    licenceID: str = Form(None),
+    connection_params: str = Form(None)  # New parameter for connection parameters as JSON string
 ):
     if not companyID or not username:
         return {"error": "Please provide both companyID and username."}
@@ -242,7 +243,15 @@ async def process_invoice(
                 data.pop(key, None)
 
             # Connect to DB and fetch desca and mcode list
-            conn = get_connection()
+            import json as json_lib
+            if connection_params:
+                try:
+                    conn_params_dict = json_lib.loads(connection_params)
+                except Exception as e:
+                    raise HTTPException(status_code=400, detail=f"Invalid connection_params JSON: {str(e)}")
+                conn = get_connection(conn_params_dict)
+            else:
+                conn = get_connection()
             cursor = conn.cursor()
             cursor.execute("SELECT desca, mcode FROM menuitem")
             menu_items = cursor.fetchall()  # list of tuples (desca, mcode)
@@ -277,7 +286,15 @@ async def process_invoice(
             current_date = date.today()
             current_time = dt.now().time()
 
-            conn = get_connection()
+            import json as json_lib
+            if connection_params:
+                try:
+                    conn_params_dict = json_lib.loads(connection_params)
+                except Exception as e:
+                    raise HTTPException(status_code=400, detail=f"Invalid connection_params JSON: {str(e)}")
+                conn = get_connection(conn_params_dict)
+            else:
+                conn = get_connection()
             cursor = conn.cursor()
             create_table_sql = """
             IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='tblOCRTokenDetails' AND xtype='U')
