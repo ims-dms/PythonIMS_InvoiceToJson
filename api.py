@@ -32,9 +32,19 @@ app.add_middleware(
 )
 
 # Initialize Gemini
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    raise ValueError("Missing GEMINI_API_KEY in environment variables")
+
+# Read GEMINI_API_KEY from appSetting.txt
+def read_api_key_from_file(file_path='appSetting.txt'):
+    try:
+        with open(file_path, 'r') as f:
+            for line in f:
+                if line.startswith('GEMINI_API_KEY='):
+                    return line.split('=', 1)[1].strip()
+    except Exception as e:
+        raise RuntimeError(f"Failed to read API key from {file_path}: {e}")
+    raise ValueError("GEMINI_API_KEY not found in appSetting.txt")
+
+GEMINI_API_KEY = read_api_key_from_file()
 
 provider = GoogleGLAProvider(api_key=GEMINI_API_KEY)
 model = GeminiModel('gemini-2.0-flash-lite', provider=provider)
