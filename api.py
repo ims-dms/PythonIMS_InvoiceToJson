@@ -334,6 +334,26 @@ async def health_check():
         "timestamp": datetime.utcnow().isoformat()
     }
 
+import asyncio
+
+def process_invoice_sync(file_path: str, companyID: str, username: str, licenceID: str = None, connection_params: str = None):
+    from fastapi import UploadFile
+    import os
+
+    class DummyUploadFile:
+        def __init__(self, path):
+            self.file_path = path
+            self.filename = os.path.basename(path)
+            self.content_type = "application/octet-stream"
+        async def read(self):
+            with open(self.file_path, "rb") as f:
+                return f.read()
+
+    dummy_file = DummyUploadFile(file_path)
+
+    coro = process_invoice(dummy_file, companyID, username, licenceID, connection_params)
+    return asyncio.run(coro)
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
