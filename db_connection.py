@@ -23,7 +23,10 @@ def get_connection(connection_params: dict = None):
     if connection_params is None:
         # Read connection details from DBConnection.txt
         with open('DBConnection.txt', 'r') as f:
-            config = json.load(f)
+            # Read all lines and skip comment lines (starting with #)
+            lines = f.readlines()
+            json_content = ''.join(line for line in lines if not line.strip().startswith('#'))
+            config = json.loads(json_content.strip())
     else:
         config = connection_params
 

@@ -3,6 +3,7 @@ import re
 import json
 import base64
 import logging
+from pdf2image import convert_from_bytes
 from datetime import datetime
 from io import BytesIO
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
@@ -15,7 +16,10 @@ from pydantic_ai.providers.google_gla import GoogleGLAProvider
 from db_connection import get_connection
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 load_dotenv()
@@ -171,20 +175,32 @@ async def process_invoice(
         usage_info = f"Gemini processing complete. Usage: {usage}"
         logger.info(usage_info)
 
-        raw_response = str(result.data)
-        logger.debug(f"Raw Gemini response: {raw_response}")
+        # Extract the actual response text from the result
+        # pydantic_ai AgentRunResult has 'output' attribute, not 'data'
+        raw_response = result.output if hasattr(result, 'output') else str(result)
+        logger.info(f"Gemini response length: {len(raw_response)} chars")
+        logger.info(f"First 500 chars of response: {raw_response[:500]}")
 
         try:
-            if hasattr(result, 'data') and isinstance(result.data, dict):
-                data = result.data
+            # Try to parse the response as JSON
+            # First, try to extract JSON from markdown code blocks (Gemini often wraps in ```json ... ```)
+            json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', raw_response, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(1).strip()
+                logger.info(f"Found JSON in markdown code block")
             else:
-                json_match = re.search(r'({.*})', raw_response, re.DOTALL)
+                # Try to find raw JSON object (match outer braces with everything inside)
+                json_match = re.search(r'\{.*\}', raw_response, re.DOTALL)
                 if json_match:
-                    data = json.loads(json_match.group(1))
+                    json_str = json_match.group(0).strip()
+                    logger.info(f"Found raw JSON object")
                 else:
-                    raise ValueError("No JSON found in response")
-
-            logger.debug(f"Keys in response data: {list(data.keys())}")
+                    logger.error(f"No JSON found in response. Full response: {raw_response}")
+                    raise ValueError(f"No JSON found in Gemini response. Response preview: {raw_response[:500]}")
+            
+            logger.debug(f"JSON string to parse (first 300 chars): {json_str[:300]}")
+            data = json.loads(json_str)
+            logger.info(f"Successfully parsed JSON with {len(data)} top-level keys: {list(data.keys())[:10]}")
 
             def normalize_key(k):
                 return k.replace(" ", "").replace("_", "").lower()

@@ -5,3 +5,4 @@ pydantic-ai
 rapidfuzz
 uvicorn
 pyodbc
+pdf2image

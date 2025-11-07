@@ -1,1 +1,1 @@
-GEMINI_API_KEY=your_api_token_here
+GEMINI_API_KEY=AIzaSyB7gYAy_0OzJp22NygC0i_nxeSzVDFefnM
