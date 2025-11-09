@@ -56,7 +56,7 @@ model = GeminiModel('gemini-2.0-flash-lite', provider=provider)
 gemini_agent = Agent(model)
 
 PROCESSING_PROMPT = """
-Extract data from TAX INVOICE document following these strict rules:
+Extract data from ALL PAGES of the TAX INVOICE document following these strict rules. Combine information from all provided images/pages into a single cohesive JSON output:
 1. Identify fields using common invoice terminology:
    - Order Number → "order_no"
    - Invoice Number → "invoice_no"
@@ -73,11 +73,11 @@ Extract data from TAX INVOICE document following these strict rules:
    - Invoice Date → "invoice_date"
 
 2. For product listings:
-   - Extract ALL SKUs from the "Description" column. It is very important to ensure that Description values are accurately extracted from the invoice.
-   - Extract SKU codes separately as "sku_code". It is very important to ensure that SKU code values are accurately extracted from the invoice.
-   - Extract corresponding numbers from the "Quantity", "Shortage", "Breakage", "Leakage", "Batch", "SNO", "Rate", "Discount", "MRP", "VAT", "HSCode", "AltQty", and "Unit" columns.
-   - HSCode is very important; ensure HSCode values are accurately extracted from the invoice.
-   - Maintain array order consistency across all product-related fields
+   - Extract ALL SKUs from the "Description" column across ALL pages. It is very important to ensure that Description values are accurately extracted from the invoice.
+   - Extract SKU codes separately as "sku_code" across ALL pages. It is very important to ensure that SKU code values are accurately extracted from the invoice.
+   - Extract corresponding numbers from the "Quantity", "Shortage", "Breakage", "Leakage", "Batch", "SNO", "Rate", "Discount", "MRP", "VAT", "HSCode", "AltQty", and "Unit" columns across ALL pages.
+   - HSCode is very important; ensure HSCode values are accurately extracted from the invoice across ALL pages.
+   - Maintain array order consistency across all product-related fields, aggregating from all pages
 
 3. Date Formatting:
    - Convert any date format to YYYY-MM-DD
@@ -203,6 +203,7 @@ async def process_invoice(
         if file.content_type == "application/pdf":
             try:
                 images = convert_pdf_bytes_to_pngs(file_content)
+                logger.info(f"Converted {len(images)} pages from PDF")
             except Exception as e:
                 logger.error(f"PDF conversion failed: {e}")
                 raise HTTPException(status_code=422, detail=str(e))
@@ -218,6 +219,7 @@ async def process_invoice(
 
         # Build agent inputs: prompt followed by all BinaryContent attachments (one per page)
         agent_inputs = [PROCESSING_PROMPT] + binary_contents
+        logger.info(f"Sending {len(binary_contents)} images to Gemini for processing")
 
         result = await gemini_agent.run(agent_inputs)
         usage = result.usage()
