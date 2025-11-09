@@ -3,7 +3,6 @@ import re
 import json
 import base64
 import logging
-from pdf2image import convert_from_bytes
 from datetime import datetime
 from io import BytesIO
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
@@ -121,6 +120,38 @@ Extract data from TAX INVOICE document following these strict rules:
    - ABSOLUTELY NO ADDITIONAL TEXT OR MARKDOWN
 """
 
+def convert_pdf_bytes_to_png(file_bytes: bytes):
+    """Convert the first page of a PDF (bytes) to PNG bytes.
+    Tries poppler/pdf2image first; if that fails, falls back to PyMuPDF (fitz) if available.
+    Raises a RuntimeError with an explanatory message if both methods fail.
+    Returns: (png_bytes, media_type)
+    """
+    try:
+        # Prefer pdf2image/poppler when available
+        from pdf2image import convert_from_bytes
+        images = convert_from_bytes(file_bytes, first_page=1, last_page=1)
+        img_byte_arr = BytesIO()
+        images[0].save(img_byte_arr, format='PNG')
+        return img_byte_arr.getvalue(), 'image/png'
+    except Exception as e_pdf:
+        # Attempt a graceful fallback using PyMuPDF (fitz)
+        try:
+            import fitz  # PyMuPDF
+            doc = fitz.open(stream=file_bytes, filetype='pdf')
+            page = doc.load_page(0)
+            # render at 2x for better OCR quality
+            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+            img_bytes = pix.tobytes('png')
+            return img_bytes, 'image/png'
+        except Exception as e_fitz:
+            # Combined error to help debugging and user instructions
+            msg = (
+                f"Failed to convert PDF to image. pdf2image error: {e_pdf}; "
+                f"PyMuPDF fallback error: {e_fitz}.\n"
+                "Ensure poppler is installed and in PATH (for pdf2image), or install PyMuPDF: `pip install PyMuPDF`."
+            )
+            raise RuntimeError(msg)
+
 def validate_response_structure(data: dict) -> bool:
     required_fields = [
         'order_no', 'invoice_no', 'delivery_note', 'vehicle_no',
@@ -162,11 +193,11 @@ async def process_invoice(
         file_content = await file.read()
 
         if file.content_type == "application/pdf":
-            images = convert_from_bytes(file_content, first_page=1, last_page=1)
-            img_byte_arr = BytesIO()
-            images[0].save(img_byte_arr, format='PNG')
-            file_content = img_byte_arr.getvalue()
-            media_type = 'image/png'
+            try:
+                file_content, media_type = convert_pdf_bytes_to_png(file_content)
+            except Exception as e:
+                logger.error(f"PDF conversion failed: {e}")
+                raise HTTPException(status_code=422, detail=str(e))
         else:
             media_type = file.content_type or 'application/octet-stream'
 
