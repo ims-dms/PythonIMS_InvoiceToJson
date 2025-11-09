@@ -14,6 +14,8 @@ from pydantic_ai import Agent, BinaryContent
 from pydantic_ai.models.gemini import GeminiModel
 from pydantic_ai.providers.google_gla import GoogleGLAProvider
 from db_connection import get_connection
+from fuzzy_matcher import match_ocr_products
+from menu_cache import get_cached_menu_items, get_cache_stats, invalidate_cache
 
 # Configure logging
 logging.basicConfig(
@@ -264,24 +266,46 @@ async def process_invoice(
 
             logger.debug(f"Raw SKU data from Gemini response: {data.get('sku', [])}")
 
+            # Fetch menu items using intelligent caching (critical for 700k items)
+            import json as json_lib
+            
+            def fetch_menu_items_from_db():
+                """Fetch menu items from database - only called on cache miss."""
+                if connection_params:
+                    try:
+                        conn_params_dict = json_lib.loads(connection_params)
+                    except Exception as e:
+                        raise HTTPException(status_code=400, detail=f"Invalid connection_params JSON: {str(e)}")
+                    conn = get_connection(conn_params_dict)
+                else:
+                    conn = get_connection()
+                
+                cursor = conn.cursor()
+                cursor.execute("SELECT desca, mcode FROM menuitem")
+                items = cursor.fetchall()
+                cursor.close()
+                conn.close()
+                return items
+            
+            # Get menu items (from cache if available, otherwise fetch from DB)
+            logger.info("Retrieving menu items for fuzzy matching...")
+            menu_items = get_cached_menu_items(fetch_menu_items_from_db)
+            cache_stats = get_cache_stats()
+            logger.info(f"Menu items retrieved. Cache status: {cache_stats['status']}, "
+                       f"Count: {cache_stats['item_count']}, Age: {cache_stats['age_seconds']}s")
+
+            # Apply fuzzy matching to products
+            logger.info(f"Starting fuzzy matching for {len(products)} products...")
+            products = match_ocr_products(
+                ocr_products=products,
+                menu_items=menu_items,
+                top_k=3,  # Return top 3 suggestions per product
+                score_cutoff=60.0  # Minimum match score of 60%
+            )
+            logger.info("Fuzzy matching completed successfully")
+
             for key in ['sku', 'quantity', 'shortage', 'breakage', 'leakage', 'batch', 'sno', 'rate', 'discount', 'mrp', 'vat', 'brands']:
                 data.pop(key, None)
-
-            # Connect to DB and fetch desca and mcode list
-            import json as json_lib
-            if connection_params:
-                try:
-                    conn_params_dict = json_lib.loads(connection_params)
-                except Exception as e:
-                    raise HTTPException(status_code=400, detail=f"Invalid connection_params JSON: {str(e)}")
-                conn = get_connection(conn_params_dict)
-            else:
-                conn = get_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT desca, mcode FROM menuitem")
-            menu_items = cursor.fetchall()  # list of tuples (desca, mcode)
-            cursor.close()
-            conn.close()
 
             data['products'] = products
 
@@ -358,6 +382,24 @@ async def health_check():
         "status": "active",
         "version": app.version,
         "timestamp": datetime.utcnow().isoformat()
+    }
+
+@app.get("/cache/status")
+async def cache_status():
+    """Get current menu item cache statistics."""
+    stats = get_cache_stats()
+    return {
+        "cache": stats,
+        "message": "Cache is healthy" if stats['status'] == 'valid' else "Cache needs refresh"
+    }
+
+@app.post("/cache/invalidate")
+async def cache_invalidate():
+    """Manually invalidate cache to force refresh on next request."""
+    invalidate_cache()
+    return {
+        "status": "success",
+        "message": "Cache invalidated. Next request will refresh from database."
     }
 
 import asyncio
