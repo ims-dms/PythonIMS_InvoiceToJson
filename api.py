@@ -120,33 +120,39 @@ Extract data from TAX INVOICE document following these strict rules:
    - ABSOLUTELY NO ADDITIONAL TEXT OR MARKDOWN
 """
 
-def convert_pdf_bytes_to_png(file_bytes: bytes):
-    """Convert the first page of a PDF (bytes) to PNG bytes.
+def convert_pdf_bytes_to_pngs(file_bytes: bytes):
+    """Convert all pages of a PDF (bytes) to a list of PNG bytes.
     Tries poppler/pdf2image first; if that fails, falls back to PyMuPDF (fitz) if available.
     Raises a RuntimeError with an explanatory message if both methods fail.
-    Returns: (png_bytes, media_type)
+    Returns: list of (png_bytes, media_type)
     """
     try:
         # Prefer pdf2image/poppler when available
         from pdf2image import convert_from_bytes
-        images = convert_from_bytes(file_bytes, first_page=1, last_page=1)
-        img_byte_arr = BytesIO()
-        images[0].save(img_byte_arr, format='PNG')
-        return img_byte_arr.getvalue(), 'image/png'
+        images = convert_from_bytes(file_bytes)
+        out = []
+        for img in images:
+            img_byte_arr = BytesIO()
+            img.save(img_byte_arr, format='PNG')
+            out.append((img_byte_arr.getvalue(), 'image/png'))
+        return out
     except Exception as e_pdf:
         # Attempt a graceful fallback using PyMuPDF (fitz)
         try:
             import fitz  # PyMuPDF
             doc = fitz.open(stream=file_bytes, filetype='pdf')
-            page = doc.load_page(0)
-            # render at 2x for better OCR quality
-            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
-            img_bytes = pix.tobytes('png')
-            return img_bytes, 'image/png'
+            out = []
+            for page_no in range(doc.page_count):
+                page = doc.load_page(page_no)
+                # render at 2x for better OCR quality
+                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+                img_bytes = pix.tobytes('png')
+                out.append((img_bytes, 'image/png'))
+            return out
         except Exception as e_fitz:
             # Combined error to help debugging and user instructions
             msg = (
-                f"Failed to convert PDF to image. pdf2image error: {e_pdf}; "
+                f"Failed to convert PDF to images. pdf2image error: {e_pdf}; "
                 f"PyMuPDF fallback error: {e_fitz}.\n"
                 "Ensure poppler is installed and in PATH (for pdf2image), or install PyMuPDF: `pip install PyMuPDF`."
             )
@@ -192,18 +198,28 @@ async def process_invoice(
     try:
         file_content = await file.read()
 
+        # Handle PDFs (convert all pages to images) or other single binary attachments
+        binary_contents = []
         if file.content_type == "application/pdf":
             try:
-                file_content, media_type = convert_pdf_bytes_to_png(file_content)
+                images = convert_pdf_bytes_to_pngs(file_content)
             except Exception as e:
                 logger.error(f"PDF conversion failed: {e}")
                 raise HTTPException(status_code=422, detail=str(e))
+            # Use the first page's base64 for any logging/preview purposes
+            first_img_bytes, first_media = images[0]
+            image_base64 = base64.b64encode(first_img_bytes).decode('utf-8')
+            for img_bytes, media in images:
+                binary_contents.append(BinaryContent(img_bytes, media_type=media))
         else:
             media_type = file.content_type or 'application/octet-stream'
+            image_base64 = base64.b64encode(file_content).decode('utf-8')
+            binary_contents.append(BinaryContent(file_content, media_type=media_type))
 
-        image_base64 = base64.b64encode(file_content).decode('utf-8')
+        # Build agent inputs: prompt followed by all BinaryContent attachments (one per page)
+        agent_inputs = [PROCESSING_PROMPT] + binary_contents
 
-        result = await gemini_agent.run([PROCESSING_PROMPT, BinaryContent(file_content, media_type=media_type)])
+        result = await gemini_agent.run(agent_inputs)
         usage = result.usage()
         usage_info = f"Gemini processing complete. Usage: {usage}"
         logger.info(usage_info)
