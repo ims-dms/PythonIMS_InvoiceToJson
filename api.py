@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from pydantic_ai import Agent, BinaryContent
 from pydantic_ai.models.gemini import GeminiModel
 from pydantic_ai.providers.google_gla import GoogleGLAProvider
+import requests
 from db_connection import get_connection
 from fuzzy_matcher import match_ocr_products
 from menu_cache import get_cached_menu_items, get_cache_stats, invalidate_cache
@@ -187,20 +188,39 @@ def normalize_arrays(data: dict) -> dict:
 
 @app.post("/extract")
 async def process_invoice(
-    file: UploadFile = File(...),
+    file: UploadFile = File(None),
     companyID: str = Form(...),
     username: str = Form(...),
     licenceID: str = Form(None),
-    connection_params: str = Form(None)  # New parameter for connection parameters as JSON string
+    connection_params: str = Form(None),  # New parameter for connection parameters as JSON string
+    extractFromLink: int = Form(0),
+    pdf_url: str = Form(None)
 ):
     if not companyID or not username:
         return {"error": "Please provide both companyID and username."}
-    try:
+    
+    if extractFromLink == 1:
+        if not pdf_url:
+            return {"error": "pdf_url is required when extractFromLink=1"}
+        try:
+            response = requests.get(pdf_url)
+            response.raise_for_status()
+            file_content = response.content
+            file_name = pdf_url.split('/')[-1].split('?')[0]  # Extract filename from URL
+            content_type = "application/pdf"  # Assume PDF
+        except requests.RequestException as e:
+            raise HTTPException(status_code=400, detail=f"Failed to download PDF from URL: {str(e)}")
+    else:
+        if not file:
+            return {"error": "file is required when extractFromLink=0"}
         file_content = await file.read()
+        file_name = file.filename
+        content_type = file.content_type
 
+    try:
         # Handle PDFs (convert all pages to images) or other single binary attachments
         binary_contents = []
-        if file.content_type == "application/pdf":
+        if content_type == "application/pdf":
             try:
                 images = convert_pdf_bytes_to_pngs(file_content)
                 logger.info(f"Converted {len(images)} pages from PDF")
@@ -213,7 +233,7 @@ async def process_invoice(
             for img_bytes, media in images:
                 binary_contents.append(BinaryContent(img_bytes, media_type=media))
         else:
-            media_type = file.content_type or 'application/octet-stream'
+            media_type = content_type or 'application/octet-stream'
             image_base64 = base64.b64encode(file_content).decode('utf-8')
             binary_contents.append(BinaryContent(file_content, media_type=media_type))
 
