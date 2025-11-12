@@ -248,10 +248,13 @@ def match_ocr_products(
     ocr_products: List[Dict[str, any]], 
     menu_items: List[Tuple[str, str]],
     top_k: int = 3,
-    score_cutoff: float = 60.0
+    score_cutoff: float = 60.0,
+    connection = None,
+    supplier_name: str = ""
 ) -> List[Dict[str, any]]:
     """
     Match OCR-extracted products against database menu items with fuzzy matching.
+    First checks OCRMappedData table for existing mappings, then falls back to fuzzy matching.
     
     This is the PRIMARY FUNCTION for your API integration.
     
@@ -261,21 +264,24 @@ def match_ocr_products(
         menu_items: List of (desca, mcode) tuples from database
         top_k: Number of suggestions per product (default: 3)
         score_cutoff: Minimum match score 0-100 (default: 60.0)
+        connection: Database connection object (optional, for OCRMappedData lookup)
+        supplier_name: Supplier name from invoice (for OCRMappedData lookup)
     
     Returns:
-        Enhanced product list with fuzzy match suggestions:
+        Enhanced product list with match suggestions:
         [
             {
                 "sku": "LACTOGEN PRO1 BIB 24x400g INNWPB176 NP",
                 "sku_code": "12579462",
                 "quantity": 5,
                 ... (all original fields preserved) ...
-                "fuzzy_matches": [
+                "fuzzy_matches": [  # Only if no exact mapping found
                     {"desca": "LACTOGEN PRO1 BIB 24x400g", "mcode": "ITM001", "score": 95.5, "rank": 1},
-                    {"desca": "LACTOGEN PRO 1 BIB", "mcode": "ITM002", "score": 82.3, "rank": 2}
+                    ...
                 ],
                 "best_match": {"desca": "...", "mcode": "...", "score": 95.5, "rank": 1},
-                "match_confidence": "high"  # high (>85), medium (70-85), low (60-70), none (<60)
+                "match_confidence": "high",  # high (>85), medium (70-85), low (60-70), none (<60)
+                "MappedNature": "Existing" | "New Mapped" | "Not Matched"
             },
             ...
         ]
@@ -296,30 +302,65 @@ def match_ocr_products(
             product['fuzzy_matches'] = []
             product['best_match'] = None
             product['match_confidence'] = 'none'
+            product['MappedNature'] = 'Not Matched'
             enhanced_products.append(product)
             continue
         
-        # Get top matches using token_set_ratio (best for product descriptions)
-        matches = matcher.match_single(
-            sku_query, 
-            limit=top_k, 
-            score_cutoff=score_cutoff,
-            scorer_name="token_set_ratio"
-        )
+        # First, check OCRMappedData table for existing mapping
+        mapped_match = None
+        if connection and supplier_name:
+            try:
+                cursor = connection.cursor()
+                cursor.execute("""
+                    SELECT DbMcode, DbDesca 
+                    FROM OCRMappedData 
+                    WHERE InvoiceProductName = ? AND InvoiceSupplierName = ?
+                """, (sku_query, supplier_name))
+                row = cursor.fetchone()
+                if row:
+                    mapped_match = {
+                        'desca': row.DbDesca,
+                        'mcode': row.DbMcode,
+                        'score': 100.0,  # Exact match
+                        'rank': 1
+                    }
+                cursor.close()
+            except Exception as e:
+                logger.warning(f"Error querying OCRMappedData: {e}")
         
-        # Add match results to product
-        product['fuzzy_matches'] = matches
-        product['best_match'] = matches[0] if matches else None
-        
-        # Classify match confidence
-        if matches and matches[0]['score'] >= 85:
-            product['match_confidence'] = 'high'
-        elif matches and matches[0]['score'] >= 70:
-            product['match_confidence'] = 'medium'
-        elif matches and matches[0]['score'] >= 60:
-            product['match_confidence'] = 'low'
+        if mapped_match:
+            # Found in mapping table
+            product['best_match'] = mapped_match
+            product['MappedNature'] = 'Existing'
+            # No fuzzy_matches or match_confidence for existing mappings
         else:
-            product['match_confidence'] = 'none'
+            # Not found in mapping, do fuzzy matching
+            matches = matcher.match_single(
+                sku_query, 
+                limit=top_k, 
+                score_cutoff=score_cutoff,
+                scorer_name="token_set_ratio"
+            )
+            
+            # Add match results to product
+            product['fuzzy_matches'] = matches
+            product['best_match'] = matches[0] if matches else None
+            
+            # Classify match confidence
+            if matches and matches[0]['score'] >= 85:
+                product['match_confidence'] = 'high'
+            elif matches and matches[0]['score'] >= 70:
+                product['match_confidence'] = 'medium'
+            elif matches and matches[0]['score'] >= 60:
+                product['match_confidence'] = 'low'
+            else:
+                product['match_confidence'] = 'none'
+            
+            # Set MappedNature
+            if matches:
+                product['MappedNature'] = 'New Mapped'
+            else:
+                product['MappedNature'] = 'Not Matched'
         
         enhanced_products.append(product)
     

@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "C:\\BzuMah\\Office\\Development\\FinalPython\\build\\PythonNetWrapper\\PythonNetWrapper.csproj": {}
+    "C:\\BzuMah\\Office\\Development\\WebPosVariant\\OCR\\FinalPython\\build\\PythonNetWrapper\\PythonNetWrapper.csproj": {}
   },
   "projects": {
-    "C:\\BzuMah\\Office\\Development\\FinalPython\\build\\PythonNetWrapper\\PythonNetWrapper.csproj": {
+    "C:\\BzuMah\\Office\\Development\\WebPosVariant\\OCR\\FinalPython\\build\\PythonNetWrapper\\PythonNetWrapper.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\BzuMah\\Office\\Development\\FinalPython\\build\\PythonNetWrapper\\PythonNetWrapper.csproj",
+        "projectUniqueName": "C:\\BzuMah\\Office\\Development\\WebPosVariant\\OCR\\FinalPython\\build\\PythonNetWrapper\\PythonNetWrapper.csproj",
         "projectName": "PythonNetWrapper",
-        "projectPath": "C:\\BzuMah\\Office\\Development\\FinalPython\\build\\PythonNetWrapper\\PythonNetWrapper.csproj",
+        "projectPath": "C:\\BzuMah\\Office\\Development\\WebPosVariant\\OCR\\FinalPython\\build\\PythonNetWrapper\\PythonNetWrapper.csproj",
         "packagesPath": "C:\\Users\\Dell\\.nuget\\packages\\",
-        "outputPath": "C:\\BzuMah\\Office\\Development\\FinalPython\\build\\PythonNetWrapper\\obj\\",
+        "outputPath": "C:\\BzuMah\\Office\\Development\\WebPosVariant\\OCR\\FinalPython\\build\\PythonNetWrapper\\obj\\",
         "projectStyle": "PackageReference",
         "fallbackFolders": [
           "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"

@@ -363,15 +363,31 @@ async def process_invoice(
             logger.info(f"Menu items retrieved. Cache status: {cache_stats['status']}, "
                        f"Count: {cache_stats['item_count']}, Age: {cache_stats['age_seconds']}s")
 
+            # Get database connection for OCRMappedData lookup
+            if connection_params:
+                try:
+                    conn_params_dict = json_lib.loads(connection_params)
+                except Exception as e:
+                    raise HTTPException(status_code=400, detail=f"Invalid connection_params JSON: {str(e)}")
+                db_conn = get_connection(conn_params_dict)
+            else:
+                db_conn = get_connection()
+
             # Apply fuzzy matching to products
             logger.info(f"Starting fuzzy matching for {len(products)} products...")
+            supplier_name = data.get('company_name', '')
             products = match_ocr_products(
                 ocr_products=products,
                 menu_items=menu_items,
                 top_k=3,  # Return top 3 suggestions per product
-                score_cutoff=60.0  # Minimum match score of 60%
+                score_cutoff=60.0,  # Minimum match score of 60%
+                connection=db_conn,
+                supplier_name=supplier_name
             )
             logger.info("Fuzzy matching completed successfully")
+
+            # Close the connection
+            db_conn.close()
 
             for key in ['sku', 'quantity', 'shortage', 'breakage', 'leakage', 'batch', 'sno', 'rate', 'discount', 'mrp', 'vat', 'brands']:
                 data.pop(key, None)

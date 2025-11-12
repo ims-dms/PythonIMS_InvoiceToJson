@@ -3,12 +3,39 @@
 <head>
     <meta charset="UTF-8" />
     <title>Upload Test Form</title>
+    <style>
+        .spinner {
+            display: none;
+            width: 24px;
+            height: 24px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3498db;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            vertical-align: middle;
+            margin-left: 10px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
 </head>
 <body>
     <h1>Upload File to /extract Endpoint</h1>
     <form action="http://127.0.0.1:8000/extract" method="post" enctype="multipart/form-data">
-        <input type="file" name="file" required />
-        <button type="submit">Upload</button>
+    <input type="file" name="file" required />
+    <button id="uploadBtn" type="submit">Upload</button>
+    <span id="spinner" class="spinner"></span>
     </form>
+    <script>
+        const form = document.querySelector('form');
+        const spinner = document.getElementById('spinner');
+        const uploadBtn = document.getElementById('uploadBtn');
+        form.addEventListener('submit', function() {
+            spinner.style.display = 'inline-block';
+            uploadBtn.disabled = true;
+        });
+    </script>
 </body>
 </html>

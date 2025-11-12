@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "azA2kyhiF+8=",
+  "dgSpecHash": "/N6yaVuyYzA=",
   "success": true,
-  "projectFilePath": "C:\\BzuMah\\Office\\Development\\FinalPython\\build\\PythonNetWrapper\\PythonNetWrapper.csproj",
+  "projectFilePath": "C:\\BzuMah\\Office\\Development\\WebPosVariant\\OCR\\FinalPython\\build\\PythonNetWrapper\\PythonNetWrapper.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\Dell\\.nuget\\packages\\microsoft.csharp\\4.7.0\\microsoft.csharp.4.7.0.nupkg.sha512",
     "C:\\Users\\Dell\\.nuget\\packages\\microsoft.netcore.platforms\\1.1.0\\microsoft.netcore.platforms.1.1.0.nupkg.sha512",
