@@ -1,3 +1,51 @@
+def api_error_response(detail):
+    """
+    Wrap error details in a standardized API error response, minimizing verbose server errors.
+    """
+    minimized = minimize_error_message(detail)
+    return format_api_response(message=minimized, status="error")
+def minimize_error_message(detail):
+    """
+    If the error detail contains a verbose server error (e.g., status_code 429),
+    return a minimized user-friendly message.
+    """
+    if isinstance(detail, dict):
+        detail_str = str(detail)
+    else:
+        detail_str = detail or ""
+    
+    # Check for specific error patterns and return user-friendly messages
+    if "status_code: 429" in detail_str or "RESOURCE_EXHAUSTED" in detail_str:
+        return "Error with the server: Resource limit exceeded. Please try again later."
+    elif "status_code: 500" in detail_str or "Internal server error" in detail_str:
+        return "Error with the server: Internal server error occurred."
+    elif "status_code: 503" in detail_str or "Service Unavailable" in detail_str:
+        return "Error with the server: Service temporarily unavailable."
+    elif "timeout" in detail_str.lower():
+        return "Error with the server: Request timed out."
+    elif "connection" in detail_str.lower() and "refused" in detail_str.lower():
+        return "Error with the server: Connection refused."
+    elif "error" in detail_str.lower() and "server" in detail_str.lower():
+        return "Error with the server"
+    
+    return detail_str
+def format_api_response(data=None, message=None, status="ok"):
+    """
+    Standardize API responses with status and message.
+    Args:
+        data: The main payload (optional)
+        message: Human-readable message (optional)
+        status: "ok" for success, "error" for failure
+    Returns:
+        dict: {"status": ..., "message": ..., "data": ...}
+    """
+    resp = {"status": status}
+    if message is not None:
+        resp["message"] = message
+    if data is not None:
+        resp["data"] = data
+    return resp
+
 """
 High-Performance Fuzzy String Matching Module using RapidFuzz
 ==============================================================

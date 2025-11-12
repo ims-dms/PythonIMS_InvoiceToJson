@@ -14,7 +14,7 @@ from pydantic_ai.models.gemini import GeminiModel
 from pydantic_ai.providers.google_gla import GoogleGLAProvider
 import requests
 from db_connection import get_connection
-from fuzzy_matcher import match_ocr_products
+from fuzzy_matcher import match_ocr_products, format_api_response, minimize_error_message, api_error_response
 from menu_cache import get_cached_menu_items, get_cache_stats, invalidate_cache
 
 # Configure logging
@@ -197,11 +197,17 @@ async def process_invoice(
     pdf_url: str = Form(None)
 ):
     if not companyID or not username:
-        return {"error": "Please provide both companyID and username."}
+        return format_api_response(
+            message="Please provide both companyID and username.",
+            status="error"
+        )
     
     if extractFromLink == 1:
         if not pdf_url:
-            return {"error": "pdf_url is required when extractFromLink=1"}
+            return format_api_response(
+                message="pdf_url is required when extractFromLink=1",
+                status="error"
+            )
         try:
             response = requests.get(pdf_url)
             response.raise_for_status()
@@ -209,10 +215,17 @@ async def process_invoice(
             file_name = pdf_url.split('/')[-1].split('?')[0]  # Extract filename from URL
             content_type = "application/pdf"  # Assume PDF
         except requests.RequestException as e:
-            raise HTTPException(status_code=400, detail=f"Failed to download PDF from URL: {str(e)}")
+            return format_api_response(
+                message="Failed to download PDF from URL",
+                data={"actual_error": str(e)},
+                status="error"
+            )
     else:
         if not file:
-            return {"error": "file is required when extractFromLink=0"}
+            return format_api_response(
+                message="file is required when extractFromLink=0",
+                status="error"
+            )
         file_content = await file.read()
         file_name = file.filename
         content_type = file.content_type
@@ -226,7 +239,11 @@ async def process_invoice(
                 logger.info(f"Converted {len(images)} pages from PDF")
             except Exception as e:
                 logger.error(f"PDF conversion failed: {e}")
-                raise HTTPException(status_code=422, detail=str(e))
+                return format_api_response(
+                    message="Failed to convert PDF",
+                    data={"actual_error": str(e)},
+                    status="error"
+                )
             # Use the first page's base64 for any logging/preview purposes
             first_img_bytes, first_media = images[0]
             image_base64 = base64.b64encode(first_img_bytes).decode('utf-8')
@@ -344,7 +361,7 @@ async def process_invoice(
                     try:
                         conn_params_dict = json_lib.loads(connection_params)
                     except Exception as e:
-                        raise HTTPException(status_code=400, detail=f"Invalid connection_params JSON: {str(e)}")
+                        raise ValueError(f"Invalid connection_params JSON: {str(e)}")
                     conn = get_connection(conn_params_dict)
                 else:
                     conn = get_connection()
@@ -368,7 +385,11 @@ async def process_invoice(
                 try:
                     conn_params_dict = json_lib.loads(connection_params)
                 except Exception as e:
-                    raise HTTPException(status_code=400, detail=f"Invalid connection_params JSON: {str(e)}")
+                    return format_api_response(
+                        message="Invalid connection parameters",
+                        data={"actual_error": str(e)},
+                        status="error"
+                    )
                 db_conn = get_connection(conn_params_dict)
             else:
                 db_conn = get_connection()
@@ -398,13 +419,19 @@ async def process_invoice(
             for key in ['sku_code', 'hscode', 'altQty', 'unit', 'full_sku_names']:
                 data.pop(key, None)
 
-            return data
+            # Return success response with proper status
+            return format_api_response(
+                data=data,
+                message="Invoice processed successfully",
+                status="ok"
+            )
 
         except (json.JSONDecodeError, ValueError) as e:
             logger.error(f"Processing error: {str(e)}")
-            raise HTTPException(
-                status_code=422,
-                detail=f"Failed to process invoice: {str(e)}"
+            return format_api_response(
+                message="Failed to process invoice",
+                data={"actual_error": str(e)},
+                status="error"
             )
 
     except Exception as e:
@@ -456,9 +483,15 @@ async def process_invoice(
         except Exception as ex:
             logger.error(f"Failed to log failure in tblOCRTokenDetails: {ex}")
         logger.error(f"Unexpected error: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
+        
+        # Return formatted error response with minimized user message
+        error_detail = str(e)
+        user_message = minimize_error_message(error_detail)
+        
+        return format_api_response(
+            message=user_message,
+            data={"actual_error": error_detail},
+            status="error"
         )
 
 @app.get("/")
