@@ -29,29 +29,19 @@ load_dotenv()
 app = FastAPI(title="Tax Invoice Processor", version="1.0.0")
 
 # CORS configuration - Fixed for browser requests with Authorization headers
+origins = [
+    "http://localhost:4100",
+    "http://localhost:8080",
+    "http://127.0.0.1:4100",
+    "http://127.0.0.1:8080",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:4100",
-        "http://localhost:8080",
-        "http://127.0.0.1:4100",
-        "http://127.0.0.1:8080",
-    ],
+    allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=[
-        "Accept",
-        "Accept-Language",
-        "Content-Type",
-        "Authorization",
-        "Origin",
-        "Referer",
-        "Connection",
-        "Sec-Fetch-Site",
-        "Sec-Fetch-Mode",
-        "Sec-Fetch-Dest",
-    ],
-    expose_headers=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Initialize Gemini
