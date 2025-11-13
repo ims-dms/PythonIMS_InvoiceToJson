@@ -329,7 +329,7 @@ def match_ocr_products(
                 ],
                 "best_match": {"desca": "...", "mcode": "...", "score": 95.5, "rank": 1},
                 "match_confidence": "high",  # high (>85), medium (70-85), low (60-70), none (<60)
-                "MappedNature": "Existing" | "New Mapped" | "Not Matched"
+                "mapped_nature": "Existing" | "New Mapped" | "Not Matched"
             },
             ...
         ]
@@ -350,7 +350,7 @@ def match_ocr_products(
             product['fuzzy_matches'] = []
             product['best_match'] = None
             product['match_confidence'] = 'none'
-            product['MappedNature'] = 'Not Matched'
+            product['mapped_nature'] = 'Not Matched'
             enhanced_products.append(product)
             continue
         
@@ -358,28 +358,68 @@ def match_ocr_products(
         mapped_match = None
         if connection and supplier_name:
             try:
+                # Ensure schema and table exist
                 cursor = connection.cursor()
+                
+                # Check if schema exists, create if not
+                cursor.execute("""
+                    IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = 'docUpload')
+                    BEGIN
+                        EXEC('CREATE SCHEMA docUpload')
+                    END
+                """)
+                connection.commit()
+                
+                # Check if table exists, create if not
+                cursor.execute("""
+                    IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[docUpload].[OCRMappedData]') AND type in (N'U'))
+                    BEGIN
+                        CREATE TABLE [docUpload].[OCRMappedData](
+                            [InvoiceProductCode] [varchar](25) NULL,
+                            [InvoiceProductName] [varchar](450) NULL,
+                            [DbMcode] [varchar](25) NOT NULL,
+                            [DbDesca] [varchar](450) NULL,
+                            [InvoiceSupplierName] [varchar](75) NULL,
+                            [DbSupplierName] [varchar](450) NOT NULL,
+                            CONSTRAINT [PK_OCRMappedData] PRIMARY KEY CLUSTERED 
+                            (
+                                [DbMcode] ASC,
+                                [DbSupplierName] ASC
+                            )WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON) ON [PRIMARY]
+                        ) ON [PRIMARY]
+                        
+                        ALTER TABLE [docUpload].[OCRMappedData]  WITH CHECK ADD  CONSTRAINT [FK_OCRMappedData_MenuItem] FOREIGN KEY([DbMcode])
+                        REFERENCES [dbo].[MENUITEM] ([MCODE])
+                        
+                        ALTER TABLE [docUpload].[OCRMappedData] CHECK CONSTRAINT [FK_OCRMappedData_MenuItem]
+                    END
+                """)
+                connection.commit()
+                
+                # Now query the table
                 cursor.execute("""
                     SELECT DbMcode, DbDesca 
-                    FROM OCRMappedData 
+                    FROM [docUpload].[OCRMappedData]
                     WHERE InvoiceProductName = ? AND InvoiceSupplierName = ?
                 """, (sku_query, supplier_name))
                 row = cursor.fetchone()
                 if row:
                     mapped_match = {
-                        'desca': row.DbDesca,
-                        'mcode': row.DbMcode,
+                        'desca': row[1] if row[1] else row[0],
+                        'mcode': row[0],
                         'score': 100.0,  # Exact match
                         'rank': 1
                     }
                 cursor.close()
             except Exception as e:
-                logger.warning(f"Error querying OCRMappedData: {e}")
+                logger.warning(f"Error querying OCRMappedData (falling back to fuzzy matching): {e}")
+                # Continue to fuzzy matching on any error
+                mapped_match = None
         
         if mapped_match:
             # Found in mapping table
             product['best_match'] = mapped_match
-            product['MappedNature'] = 'Existing'
+            product['mapped_nature'] = 'Existing'
             # No fuzzy_matches or match_confidence for existing mappings
         else:
             # Not found in mapping, do fuzzy matching
@@ -404,11 +444,11 @@ def match_ocr_products(
             else:
                 product['match_confidence'] = 'none'
             
-            # Set MappedNature
+            # Set mapped_nature
             if matches:
-                product['MappedNature'] = 'New Mapped'
+                product['mapped_nature'] = 'New Mapped'
             else:
-                product['MappedNature'] = 'Not Matched'
+                product['mapped_nature'] = 'Not Matched'
         
         enhanced_products.append(product)
     

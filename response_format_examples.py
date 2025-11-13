@@ -64,7 +64,7 @@ success_response = {
                     "rank": 1
                 },
                 "match_confidence": "high",
-                "MappedNature": "New Mapped"
+                "mapped_nature": "New Mapped"
             }
         ]
     }

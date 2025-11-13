@@ -95,7 +95,7 @@ SUCCESS RESPONSE STRUCTURE
           "rank": 1
         },
         "match_confidence": "high",
-        "MappedNature": "New Mapped"
+        "mapped_nature": "New Mapped"
       }
     ]
   }
@@ -110,7 +110,7 @@ KEY FIELDS IN SUCCESS RESPONSE
 - data.products: Array of products with fuzzy matching results
 - data.products[].best_match: Top matching item from database
 - data.products[].match_confidence: "high" (>85), "medium" (70-85), "low" (60-70), "none" (<60)
-- data.products[].MappedNature: "Existing" | "New Mapped" | "Not Matched"
+- data.products[].mapped_nature: "Existing" | "New Mapped" | "Not Matched"
 
 ERROR RESPONSE STRUCTURE
 ========================
