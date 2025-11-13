@@ -64,12 +64,12 @@ class MenuItemCache:
         self._ttl = ttl
         logger.info(f"Cache TTL updated to {ttl}s")
     
-    def load(self, menu_items: List[Tuple[str, str]], force: bool = False) -> None:
+    def load(self, menu_items: List[Tuple[str, str, str]], force: bool = False) -> None:
         """
         Load menu items into cache.
         
         Args:
-            menu_items: List of (desca, menucode) tuples from database
+            menu_items: List of (desca, mcode, menucode) tuples from database
             force: Force reload even if cache is valid
         """
         with self._lock:
@@ -79,8 +79,15 @@ class MenuItemCache:
             
             start_time = time.time()
             
-            # Filter out None/empty DESCA entries
-            valid_items = [(d, m) for d, m in menu_items if d and d.strip()]
+            # Filter out None/empty DESCA entries and normalize tuples
+            valid_items = []
+            for item in menu_items:
+                if item and len(item) >= 2 and item[0] and item[0].strip():
+                    # Handle both 2-tuple (desca, mcode) and 3-tuple (desca, mcode, menucode)
+                    if len(item) == 2:
+                        valid_items.append((item[0], item[1], item[1]))  # Use mcode as menucode
+                    else:
+                        valid_items.append((item[0], item[1], item[2] if item[2] else item[1]))
             
             self._cache_data = {
                 'items': valid_items,
@@ -96,12 +103,12 @@ class MenuItemCache:
                 f"(load #{self._load_count})"
             )
     
-    def get(self) -> Optional[List[Tuple[str, str]]]:
+    def get(self) -> Optional[List[Tuple[str, str, str]]]:
         """
         Get cached menu items.
         
         Returns:
-            List of (desca, menucode) tuples, or None if cache is invalid
+            List of (desca, mcode, menucode) tuples, or None if cache is invalid
         """
         if not self.is_valid():
             logger.warning("Cache is invalid or expired")
@@ -159,7 +166,7 @@ _global_cache = MenuItemCache()
 def get_cached_menu_items(
     fetch_function,
     force_refresh: bool = False
-) -> List[Tuple[str, str]]:
+) -> List[Tuple[str, str, str]]:
     """
     Get menu items from cache or fetch from database if needed.
     
@@ -167,17 +174,17 @@ def get_cached_menu_items(
     
     Args:
         fetch_function: Function that fetches menu items from DB
-                       Should return List[Tuple[str, str]]
+                       Should return List[Tuple[str, str, str]]
         force_refresh: Force database query even if cache is valid
     
     Returns:
-        List of (desca, menucode) tuples
+        List of (desca, mcode, menucode) tuples
     
     Example:
         def fetch_from_db():
             conn = get_connection()
             cursor = conn.cursor()
-            cursor.execute("SELECT desca, menucode FROM menuitem")
+            cursor.execute("SELECT desca, mcode, menucode FROM menuitem")
             items = cursor.fetchall()
             cursor.close()
             conn.close()
@@ -235,9 +242,9 @@ if __name__ == "__main__":
         import time
         time.sleep(0.5)  # Simulate network latency
         return [
-            ("LACTOGEN PRO 1 BIB 24x400g", "ITM001"),
-            ("LACTOGEN PRO 2 BIB 24x400g", "ITM002"),
-            ("NESCAFE CLASSIC 100g", "ITM003")
+            ("LACTOGEN PRO 1 BIB 24x400g", "ITM001", "MENU001"),
+            ("LACTOGEN PRO 2 BIB 24x400g", "ITM002", "MENU002"),
+            ("NESCAFE CLASSIC 100g", "ITM003", "MENU003")
         ]
     
     # First call - should fetch from DB

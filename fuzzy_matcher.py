@@ -94,20 +94,21 @@ class FuzzyMatcher:
         self._cache_ttl = cache_ttl
         logger.info(f"FuzzyMatcher initialized with {cache_ttl}s cache TTL")
     
-    def load_menu_items(self, menu_items: List[Tuple[str, str]]) -> None:
+    def load_menu_items(self, menu_items: List[Tuple[str, str, str]]) -> None:
         """
         Load and cache menu items from database.
         
         Args:
-            menu_items: List of tuples (desca, menucode) from database query
+            menu_items: List of tuples (desca, mcode, menucode) from database query
         """
         start_time = time.time()
         
         # Create lookup structures for ultra-fast matching
         self._cache = {
             'desca_list': [item[0] for item in menu_items if item[0]],  # Filter out None/empty
-            'menucode_list': [item[1] for item in menu_items if item[0]],
-            'desca_to_menucode': {item[0]: item[1] for item in menu_items if item[0]},
+            'mcode_list': [item[1] for item in menu_items if item[0]],
+            'menucode_list': [item[2] for item in menu_items if item[0]],
+            'desca_to_mcode': {item[0]: item[1] for item in menu_items if item[0]},
             'item_count': len([item for item in menu_items if item[0]])
         }
         
@@ -128,7 +129,7 @@ class FuzzyMatcher:
         limit: int = 5, 
         score_cutoff: float = 60.0,
         scorer_name: str = "token_set_ratio"
-    ) -> List[Dict[str, any]]:
+    ) -> Dict[str, any]:
         """
         Match a single SKU query against all DESCA entries using RapidFuzz.
         
@@ -139,11 +140,9 @@ class FuzzyMatcher:
             scorer_name: Scoring algorithm to use (see SCORER_GUIDE below)
         
         Returns:
-            List of match dictionaries with keys:
-            - desca: Matched description from database
-            - menucode: Corresponding menu code
-            - score: Similarity score (0-100)
-            - rank: Match rank (1 = best match)
+            Dictionary with match results:
+            - fuzzy_matches: List of match dictionaries with keys desca, mcode, menucode, score, rank
+            - best_match: The top match dictionary or None
         
         SCORER SELECTION GUIDE:
         =======================
@@ -206,9 +205,11 @@ class FuzzyMatcher:
         # Format results with all relevant information
         results = []
         for rank, (matched_desca, score, idx) in enumerate(matches, start=1):
+            mcode = self._cache['mcode_list'][idx]
             menucode = self._cache['menucode_list'][idx]
             results.append({
                 'desca': matched_desca,
+                'mcode': mcode,
                 'menucode': menucode,
                 'score': round(score, 2),
                 'rank': rank
@@ -219,7 +220,10 @@ class FuzzyMatcher:
             f"(scorer: {scorer_name}, found: {len(results)} matches)"
         )
         
-        return results
+        return {
+            'fuzzy_matches': results,
+            'best_match': results[0] if results else None
+        }
     
     def match_batch(
         self, 
@@ -227,7 +231,7 @@ class FuzzyMatcher:
         limit: int = 3, 
         score_cutoff: float = 60.0,
         scorer_name: str = "token_set_ratio"
-    ) -> Dict[str, List[Dict[str, any]]]:
+    ) -> Dict[str, Dict[str, any]]:
         """
         Match multiple SKU queries efficiently in batch mode.
         
@@ -238,12 +242,12 @@ class FuzzyMatcher:
             scorer_name: Scoring algorithm (see match_single for options)
         
         Returns:
-            Dictionary mapping each query to its match results
+            Dictionary mapping each query to its match results dict
             {
-                "LACTOGEN PRO1 BIB 24x400g": [
-                    {"desca": "...", "menucode": "...", "score": 95.5, "rank": 1},
-                    {"desca": "...", "menucode": "...", "score": 87.2, "rank": 2}
-                ],
+                "LACTOGEN PRO1 BIB 24x400g": {
+                    "fuzzy_matches": [{"desca": "...", "mcode": "...", "menucode": "...", "score": 95.5, "rank": 1}, ...],
+                    "best_match": {"desca": "...", "mcode": "...", "menucode": "...", "score": 95.5, "rank": 1}
+                },
                 ...
             }
         """
@@ -288,13 +292,13 @@ class FuzzyMatcher:
             Best match dictionary or None if no match above cutoff
         """
         
-        matches = self.match_single(query, limit=1, score_cutoff=score_cutoff, scorer_name=scorer_name)
-        return matches[0] if matches else None
+        match_result = self.match_single(query, limit=1, score_cutoff=score_cutoff, scorer_name=scorer_name)
+        return match_result['best_match']
 
 
 def match_ocr_products(
     ocr_products: List[Dict[str, any]], 
-    menu_items: List[Tuple[str, str]],
+    menu_items: List[Tuple[str, str, str]],
     top_k: int = 3,
     score_cutoff: float = 60.0,
     connection = None,
@@ -309,7 +313,7 @@ def match_ocr_products(
     Args:
         ocr_products: List of product dictionaries from OCR extraction
                      Each must have 'sku' key with description
-        menu_items: List of (desca, menucode) tuples from database
+        menu_items: List of (desca, mcode) tuples from database
         top_k: Number of suggestions per product (default: 3)
         score_cutoff: Minimum match score 0-100 (default: 60.0)
         connection: Database connection object (optional, for OCRMappedData lookup)
@@ -324,10 +328,10 @@ def match_ocr_products(
                 "quantity": 5,
                 ... (all original fields preserved) ...
                 "fuzzy_matches": [  # Only if no exact mapping found
-                    {"desca": "LACTOGEN PRO1 BIB 24x400g", "menucode": "ITM001", "score": 95.5, "rank": 1},
+                    {"desca": "LACTOGEN PRO1 BIB 24x400g", "mcode": "ITM001", "score": 95.5, "rank": 1},
                     ...
                 ],
-                "best_match": {"desca": "...", "menucode": "...", "score": 95.5, "rank": 1},
+                "best_match": {"desca": "...", "mcode": "...", "score": 95.5, "rank": 1},
                 "match_confidence": "high",  # high (>85), medium (70-85), low (60-70), none (<60)
                 "mapped_nature": "Existing" | "New Mapped" | "Not Matched"
             },
@@ -377,28 +381,35 @@ def match_ocr_products(
                         CREATE TABLE [docUpload].[OCRMappedData](
                             [InvoiceProductCode] [varchar](25) NULL,
                             [InvoiceProductName] [varchar](450) NULL,
-                            [Dbmenucode] [varchar](25) NOT NULL,
+                            [Dbmcode] [varchar](25) NOT NULL,
                             [DbDesca] [varchar](450) NULL,
+                            [DbMenuCode] [varchar](25) NOT NULL,
                             [InvoiceSupplierName] [varchar](75) NULL,
                             [DbSupplierName] [varchar](450) NOT NULL,
                             CONSTRAINT [PK_OCRMappedData] PRIMARY KEY CLUSTERED 
                             (
-                                [Dbmenucode] ASC,
+                                [Dbmcode] ASC,
                                 [DbSupplierName] ASC
                             )WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON) ON [PRIMARY]
                         ) ON [PRIMARY]
                         
-                        ALTER TABLE [docUpload].[OCRMappedData]  WITH CHECK ADD  CONSTRAINT [FK_OCRMappedData_MenuItem] FOREIGN KEY([Dbmenucode])
-                        REFERENCES [dbo].[MENUITEM] ([menucode])
+                        ALTER TABLE [docUpload].[OCRMappedData]  WITH CHECK ADD  CONSTRAINT [FK_OCRMappedData_MenuItem] FOREIGN KEY([Dbmcode])
+                        REFERENCES [dbo].[MENUITEM] ([mcode])
                         
                         ALTER TABLE [docUpload].[OCRMappedData] CHECK CONSTRAINT [FK_OCRMappedData_MenuItem]
+                    END
+                    
+                    -- Add DbMenuCode column if it doesn't exist
+                    IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[docUpload].[OCRMappedData]') AND name = 'DbMenuCode')
+                    BEGIN
+                        ALTER TABLE [docUpload].[OCRMappedData] ADD [DbMenuCode] [varchar](25) NOT NULL DEFAULT('')
                     END
                 """)
                 connection.commit()
                 
                 # Now query the table
                 cursor.execute("""
-                    SELECT Dbmenucode, DbDesca 
+                    SELECT Dbmcode, DbDesca, DbMenuCode
                     FROM [docUpload].[OCRMappedData]
                     WHERE InvoiceProductName = ? AND InvoiceSupplierName = ?
                 """, (sku_query, supplier_name))
@@ -406,7 +417,8 @@ def match_ocr_products(
                 if row:
                     mapped_match = {
                         'desca': row[1] if row[1] else row[0],
-                        'menucode': row[0],
+                        'mcode': row[0],
+                        'menucode': row[2] if row[2] else row[0],  # Use DbMenuCode if available, else Dbmcode
                         'score': 100.0,  # Exact match
                         'rank': 1
                     }
@@ -423,7 +435,7 @@ def match_ocr_products(
             # No fuzzy_matches or match_confidence for existing mappings
         else:
             # Not found in mapping, do fuzzy matching
-            matches = matcher.match_single(
+            match_result = matcher.match_single(
                 sku_query, 
                 limit=top_k, 
                 score_cutoff=score_cutoff,
@@ -431,10 +443,11 @@ def match_ocr_products(
             )
             
             # Add match results to product
-            product['fuzzy_matches'] = matches
-            product['best_match'] = matches[0] if matches else None
+            product['fuzzy_matches'] = match_result['fuzzy_matches']
+            product['best_match'] = match_result['best_match']
             
             # Classify match confidence
+            matches = match_result['fuzzy_matches']
             if matches and matches[0]['score'] >= 85:
                 product['match_confidence'] = 'high'
             elif matches and matches[0]['score'] >= 70:
@@ -466,11 +479,11 @@ def example_standalone_matching():
     
     # Simulated database data (in real use, fetch from DB)
     menu_items = [
-        ("LACTOGEN PRO 1 BIB 24x400g INNWPB176", "ITM001"),
-        ("LACTOGEN PRO 2 BIB 24x400g INLEB086", "ITM002"),
-        ("NESCAFE CLASSIC 100g JAR", "ITM003"),
-        ("NESCAFE GOLD 50g POUCH", "ITM004"),
-        ("MAGGI NOODLES 2-MIN 70g", "ITM005")
+        ("LACTOGEN PRO 1 BIB 24x400g INNWPB176", "ITM001", "MENU001"),
+        ("LACTOGEN PRO 2 BIB 24x400g INLEB086", "ITM002", "MENU002"),
+        ("NESCAFE CLASSIC 100g JAR", "ITM003", "MENU003"),
+        ("NESCAFE GOLD 50g POUCH", "ITM004", "MENU004"),
+        ("MAGGI NOODLES 2-MIN 70g", "ITM005", "MENU005")
     ]
     
     # Initialize matcher
@@ -479,14 +492,14 @@ def example_standalone_matching():
     
     # Single query match
     query = "LACTOGEN PRO1 BIB 24x400g INNWPB176 NP"
-    matches = matcher.match_single(query, limit=3, score_cutoff=60.0)
+    match_result = matcher.match_single(query, limit=3, score_cutoff=60.0)
     
     print(f"Query: {query}")
-    for match in matches:
-        print(f"  Rank {match['rank']}: {match['desca']} (Code: {match['menucode']}, Score: {match['score']})")
+    for match in match_result['fuzzy_matches']:
+        print(f"  Rank {match['rank']}: {match['desca']} (Code: {match['mcode']}, Menucode: {match['menucode']}, Score: {match['score']})")
     
     # Best match only
-    best = matcher.get_best_match(query, score_cutoff=70.0)
+    best = match_result['best_match']
     if best:
         print(f"\nBest Match: {best['desca']} (Score: {best['score']})")
 
@@ -499,9 +512,9 @@ def example_scorer_comparison():
     """
     
     menu_items = [
-        ("Apple iPhone 15 Pro Max 256GB", "PHONE001"),
-        ("iPhone 15 Pro Max Apple", "PHONE002"),
-        ("Apple iPhone 15 Standard", "PHONE003")
+        ("Apple iPhone 15 Pro Max 256GB", "PHONE001", "MENU001"),
+        ("iPhone 15 Pro Max Apple", "PHONE002", "MENU002"),
+        ("Apple iPhone 15 Standard", "PHONE003", "MENU003")
     ]
     
     matcher = FuzzyMatcher()
@@ -513,9 +526,9 @@ def example_scorer_comparison():
     
     print(f"Query: {query}\n")
     for scorer in scorers:
-        matches = matcher.match_single(query, limit=1, scorer_name=scorer, score_cutoff=0)
-        if matches:
-            print(f"{scorer:20s}: {matches[0]['desca']:40s} Score: {matches[0]['score']}")
+        match_result = matcher.match_single(query, limit=1, scorer_name=scorer, score_cutoff=0)
+        if match_result['best_match']:
+            print(f"{scorer:20s}: {match_result['best_match']['desca']:40s} Score: {match_result['best_match']['score']}")
 
 
 if __name__ == "__main__":

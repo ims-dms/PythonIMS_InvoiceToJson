@@ -90,7 +90,7 @@ SUCCESS RESPONSE STRUCTURE
         "quantity": 5,
         "best_match": {
           "desca": "LACTOGEN PRO 1 BIB 24x400g",
-          "menucode": "ITM001",
+          "mcode": "ITM001",
           "score": 95.5,
           "rank": 1
         },

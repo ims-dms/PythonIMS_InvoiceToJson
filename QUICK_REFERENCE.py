@@ -57,7 +57,7 @@ from fuzzy_matcher import match_ocr_products
 
 enhanced_products = match_ocr_products(
     ocr_products=products,      # Your OCR results
-    menu_items=menu_items,      # Database items [(desca, menucode), ...]
+    menu_items=menu_items,      # Database items [(desca, mcode), ...]
     top_k=3,                    # Top 3 suggestions
     score_cutoff=60.0           # Minimum 60% match
 )
@@ -95,7 +95,7 @@ RESPONSE FORMAT
       "fuzzy_matches": [
         {
           "desca": "LACTOGEN PRO 1 BIB 24x400g INNWPB176",
-          "menucode": "menucode_001",
+          "mcode": "mcode_001",
           "score": 94.59,
           "rank": 1
         },
@@ -104,7 +104,7 @@ RESPONSE FORMAT
       
       "best_match": {
         "desca": "LACTOGEN PRO 1 BIB 24x400g INNWPB176",
-        "menucode": "menucode_001",
+        "mcode": "mcode_001",
         "score": 94.59,
         "rank": 1
       },
@@ -156,7 +156,7 @@ COMMON PATTERNS
 ────────────────────────────────────────────────────────────────────────────────
 # Pattern 1: Auto-accept high confidence matches
 if product['match_confidence'] == 'high':
-    selected_menucode = product['best_match']['menucode']
+    selected_mcode = product['best_match']['mcode']
     # Use this automatically
 
 # Pattern 2: Suggest medium/low confidence
