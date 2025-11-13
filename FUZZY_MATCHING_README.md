@@ -51,7 +51,7 @@ RapidFuzz fuzzy matching finds the best match with **94.59% confidence** ✅
 {
   "best_match": {
     "desca": "LACTOGEN PRO 1 BIB 24x400g INNWPB176",
-    "mcode": "MCODE_001",
+    "menucode": "menucode_001",
     "score": 94.59
   },
   "match_confidence": "high"
@@ -180,7 +180,7 @@ Output:
 ```python
 {
   "desca": "LACTOGEN PRO 1 BIB 24x400g INNWPB176",
-  "mcode": "MCODE_001",
+  "menucode": "menucode_001",
   "score": 94.59,
   "rank": 1
 }
@@ -206,8 +206,8 @@ Output:
     "sku": "LACTOGEN PRO1 BIB 24x400g INNWPB176 NP",
     "quantity": 5,
     "fuzzy_matches": [
-      {"desca": "...", "mcode": "...", "score": 94.59, "rank": 1},
-      {"desca": "...", "mcode": "...", "score": 82.35, "rank": 2}
+      {"desca": "...", "menucode": "...", "score": 94.59, "rank": 1},
+      {"desca": "...", "menucode": "...", "score": 82.35, "rank": 2}
     ],
     "best_match": {...},
     "match_confidence": "high"
@@ -440,7 +440,7 @@ matcher.match_single(query, scorer_name="partial_ratio")
 ```python
 if product['match_confidence'] == 'high':
     # Auto-accept
-    mcode = product['best_match']['mcode']
+    menucode = product['best_match']['menucode']
     
 elif product['match_confidence'] in ['medium', 'low']:
     # Show suggestions to user

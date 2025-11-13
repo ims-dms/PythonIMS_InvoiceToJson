@@ -33,7 +33,7 @@ All API responses now follow this structure:
         "quantity": 5,
         "best_match": {
           "desca": "LACTOGEN PRO 1 BIB 24x400g",
-          "mcode": "ITM001",
+          "menucode": "ITM001",
           "score": 95.5
         }
       }

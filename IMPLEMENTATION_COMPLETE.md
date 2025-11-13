@@ -78,20 +78,20 @@ Your **production-ready RapidFuzz fuzzy matching system** for matching OCR-extra
   "fuzzy_matches": [
     {
       "desca": "LACTOGEN PRO 1 BIB 24x400g INNWPB176",
-      "mcode": "MCODE_001",
+      "menucode": "menucode_001",
       "score": 94.59,
       "rank": 1
     },
     {
       "desca": "LACTOGEN PRO 2 BIB 24x400g INLEB086",
-      "mcode": "MCODE_002",
+      "menucode": "menucode_002",
       "score": 82.35,
       "rank": 2
     }
   ],
   "best_match": {
     "desca": "LACTOGEN PRO 1 BIB 24x400g INNWPB176",
-    "mcode": "MCODE_001",
+    "menucode": "menucode_001",
     "score": 94.59,
     "rank": 1
   },
@@ -132,7 +132,7 @@ RESULT: 7/7 TESTS PASSED
 Query: LACTOGEN PRO1 BIB 24x400g INNWPB176 NP
 Match: LACTOGEN PRO 1 BIB 24x400g INNWPB176
 Score: 94.59
-Code: MCODE_001
+Code: menucode_001
 Confidence: high
 ```
 
@@ -226,7 +226,7 @@ cache = MenuItemCache(ttl=3600)  # Change to desired seconds
 ### 1. Auto-Accept High Confidence
 ```python
 if product['match_confidence'] == 'high':
-    mcode = product['best_match']['mcode']
+    menucode = product['best_match']['menucode']
     # Use automatically
 ```
 

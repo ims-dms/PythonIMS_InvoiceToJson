@@ -139,20 +139,20 @@ enhanced_products = match_ocr_products(
       "fuzzy_matches": [
         {
           "desca": "LACTOGEN PRO 1 BIB 24x400g INNWPB176",
-          "mcode": "MCODE_001",
+          "menucode": "menucode_001",
           "score": 95.5,
           "rank": 1
         },
         {
           "desca": "LACTOGEN PRO 1 BIB 24x400g",
-          "mcode": "MCODE_002",
+          "menucode": "menucode_002",
           "score": 87.2,
           "rank": 2
         }
       ],
       "best_match": {
         "desca": "LACTOGEN PRO 1 BIB 24x400g INNWPB176",
-        "mcode": "MCODE_001",
+        "menucode": "menucode_001",
         "score": 95.5,
         "rank": 1
       },
@@ -367,7 +367,7 @@ from menu_cache import get_cached_menu_items, get_cache_stats
 def fetch_from_database():
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT desca, mcode FROM menuitem")
+    cursor.execute("SELECT desca, menucode FROM menuitem")
     items = cursor.fetchall()
     cursor.close()
     conn.close()
@@ -454,7 +454,7 @@ CREATE INDEX idx_menuitem_desca ON menuitem(desca);
 
 -- Consider materialized view if data is static
 CREATE MATERIALIZED VIEW mv_menuitem_search AS
-SELECT desca, mcode FROM menuitem WHERE desca IS NOT NULL;
+SELECT desca, menucode FROM menuitem WHERE desca IS NOT NULL;
 ```
 
 ---

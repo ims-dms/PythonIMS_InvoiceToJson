@@ -73,16 +73,16 @@ SAMPLE_OCR_PRODUCTS = [
 
 # Sample database menu items (simulating 700k items with representative sample)
 SAMPLE_MENU_ITEMS = [
-    ("LACTOGEN PRO 1 BIB 24x400g INNWPB176", "MCODE_001"),
-    ("LACTOGEN PRO 2 BIB 24x400g INLEB086", "MCODE_002"),
-    ("LACTOGEN PRO 3 FOLLOW UP FORMULA 400g", "MCODE_003"),
-    ("NESCAFE CLASSIC INSTANT COFFEE 100g", "MCODE_004"),
-    ("NESCAFE GOLD BLEND 50g POUCH", "MCODE_005"),
-    ("MAGGI 2-MINUTE NOODLES MASALA 70g", "MCODE_006"),
-    ("MAGGI HOT & SWEET SAUCE 1kg BOTTLE", "MCODE_007"),
-    ("KITKAT CHOCOLATE 4 FINGER 41.5g", "MCODE_008"),
-    ("MILO ENERGY DRINK POWDER 400g TIN", "MCODE_009"),
-    ("CERELAC WHEAT WITH MILK 300g STAGE 1", "MCODE_010")
+    ("LACTOGEN PRO 1 BIB 24x400g INNWPB176", "menucode_001"),
+    ("LACTOGEN PRO 2 BIB 24x400g INLEB086", "menucode_002"),
+    ("LACTOGEN PRO 3 FOLLOW UP FORMULA 400g", "menucode_003"),
+    ("NESCAFE CLASSIC INSTANT COFFEE 100g", "menucode_004"),
+    ("NESCAFE GOLD BLEND 50g POUCH", "menucode_005"),
+    ("MAGGI 2-MINUTE NOODLES MASALA 70g", "menucode_006"),
+    ("MAGGI HOT & SWEET SAUCE 1kg BOTTLE", "menucode_007"),
+    ("KITKAT CHOCOLATE 4 FINGER 41.5g", "menucode_008"),
+    ("MILO ENERGY DRINK POWDER 400g TIN", "menucode_009"),
+    ("CERELAC WHEAT WITH MILK 300g STAGE 1", "menucode_010")
 ]
 
 
@@ -109,7 +109,7 @@ def test_basic_matching():
         print(f"✓ Found {len(matches)} matches:")
         for match in matches:
             print(f"  Rank {match['rank']}: {match['desca']}")
-            print(f"    Code: {match['mcode']}, Score: {match['score']}")
+            print(f"    Code: {match['menucode']}, Score: {match['score']}")
     else:
         print("✗ No matches found")
     
@@ -197,7 +197,7 @@ def test_ocr_integration():
         
         if product['best_match']:
             print(f"  Best Match: {product['best_match']['desca']}")
-            print(f"  Code: {product['best_match']['mcode']}")
+            print(f"  Code: {product['best_match']['menucode']}")
             print(f"  Score: {product['best_match']['score']}")
         else:
             print(f"  No match found")
@@ -227,7 +227,7 @@ def test_cache_performance():
     # For testing, we'll use 10k items
     large_dataset = []
     for i in range(10000):
-        large_dataset.append((f"PRODUCT_{i}_DESCRIPTION_TEXT_{i%100}", f"MCODE_{i}"))
+        large_dataset.append((f"PRODUCT_{i}_DESCRIPTION_TEXT_{i%100}", f"menucode_{i}"))
     
     print(f"\nSimulated dataset: {len(large_dataset)} items")
     
@@ -285,8 +285,8 @@ def test_performance_benchmark():
     for i in range(700000):
         template = product_templates[i % len(product_templates)]
         desca = template.format(i % 1000, i % 500, i % 100)
-        mcode = f"MCODE_{i:07d}"
-        large_dataset.append((desca, mcode))
+        menucode = f"menucode_{i:07d}"
+        large_dataset.append((desca, menucode))
     
     generation_time = time.time() - start
     print(f"Generated {len(large_dataset)} items in {generation_time:.2f}s")
@@ -316,7 +316,7 @@ def test_performance_benchmark():
         print(f"\nTop 3 matches:")
         for match in matches[:3]:
             print(f"  {match['rank']}. {match['desca']}")
-            print(f"     Score: {match['score']}, Code: {match['mcode']}")
+            print(f"     Score: {match['score']}, Code: {match['menucode']}")
     
     # Performance assertions
     assert query_time < 1.0, "Query should complete in under 1 second for 700k items"

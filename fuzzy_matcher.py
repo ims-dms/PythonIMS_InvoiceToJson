@@ -99,15 +99,15 @@ class FuzzyMatcher:
         Load and cache menu items from database.
         
         Args:
-            menu_items: List of tuples (desca, mcode) from database query
+            menu_items: List of tuples (desca, menucode) from database query
         """
         start_time = time.time()
         
         # Create lookup structures for ultra-fast matching
         self._cache = {
             'desca_list': [item[0] for item in menu_items if item[0]],  # Filter out None/empty
-            'mcode_list': [item[1] for item in menu_items if item[0]],
-            'desca_to_mcode': {item[0]: item[1] for item in menu_items if item[0]},
+            'menucode_list': [item[1] for item in menu_items if item[0]],
+            'desca_to_menucode': {item[0]: item[1] for item in menu_items if item[0]},
             'item_count': len([item for item in menu_items if item[0]])
         }
         
@@ -141,7 +141,7 @@ class FuzzyMatcher:
         Returns:
             List of match dictionaries with keys:
             - desca: Matched description from database
-            - mcode: Corresponding menu code
+            - menucode: Corresponding menu code
             - score: Similarity score (0-100)
             - rank: Match rank (1 = best match)
         
@@ -206,10 +206,10 @@ class FuzzyMatcher:
         # Format results with all relevant information
         results = []
         for rank, (matched_desca, score, idx) in enumerate(matches, start=1):
-            mcode = self._cache['mcode_list'][idx]
+            menucode = self._cache['menucode_list'][idx]
             results.append({
                 'desca': matched_desca,
-                'mcode': mcode,
+                'menucode': menucode,
                 'score': round(score, 2),
                 'rank': rank
             })
@@ -241,8 +241,8 @@ class FuzzyMatcher:
             Dictionary mapping each query to its match results
             {
                 "LACTOGEN PRO1 BIB 24x400g": [
-                    {"desca": "...", "mcode": "...", "score": 95.5, "rank": 1},
-                    {"desca": "...", "mcode": "...", "score": 87.2, "rank": 2}
+                    {"desca": "...", "menucode": "...", "score": 95.5, "rank": 1},
+                    {"desca": "...", "menucode": "...", "score": 87.2, "rank": 2}
                 ],
                 ...
             }
@@ -309,7 +309,7 @@ def match_ocr_products(
     Args:
         ocr_products: List of product dictionaries from OCR extraction
                      Each must have 'sku' key with description
-        menu_items: List of (desca, mcode) tuples from database
+        menu_items: List of (desca, menucode) tuples from database
         top_k: Number of suggestions per product (default: 3)
         score_cutoff: Minimum match score 0-100 (default: 60.0)
         connection: Database connection object (optional, for OCRMappedData lookup)
@@ -324,10 +324,10 @@ def match_ocr_products(
                 "quantity": 5,
                 ... (all original fields preserved) ...
                 "fuzzy_matches": [  # Only if no exact mapping found
-                    {"desca": "LACTOGEN PRO1 BIB 24x400g", "mcode": "ITM001", "score": 95.5, "rank": 1},
+                    {"desca": "LACTOGEN PRO1 BIB 24x400g", "menucode": "ITM001", "score": 95.5, "rank": 1},
                     ...
                 ],
-                "best_match": {"desca": "...", "mcode": "...", "score": 95.5, "rank": 1},
+                "best_match": {"desca": "...", "menucode": "...", "score": 95.5, "rank": 1},
                 "match_confidence": "high",  # high (>85), medium (70-85), low (60-70), none (<60)
                 "mapped_nature": "Existing" | "New Mapped" | "Not Matched"
             },
@@ -377,19 +377,19 @@ def match_ocr_products(
                         CREATE TABLE [docUpload].[OCRMappedData](
                             [InvoiceProductCode] [varchar](25) NULL,
                             [InvoiceProductName] [varchar](450) NULL,
-                            [DbMcode] [varchar](25) NOT NULL,
+                            [Dbmenucode] [varchar](25) NOT NULL,
                             [DbDesca] [varchar](450) NULL,
                             [InvoiceSupplierName] [varchar](75) NULL,
                             [DbSupplierName] [varchar](450) NOT NULL,
                             CONSTRAINT [PK_OCRMappedData] PRIMARY KEY CLUSTERED 
                             (
-                                [DbMcode] ASC,
+                                [Dbmenucode] ASC,
                                 [DbSupplierName] ASC
                             )WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON) ON [PRIMARY]
                         ) ON [PRIMARY]
                         
-                        ALTER TABLE [docUpload].[OCRMappedData]  WITH CHECK ADD  CONSTRAINT [FK_OCRMappedData_MenuItem] FOREIGN KEY([DbMcode])
-                        REFERENCES [dbo].[MENUITEM] ([MCODE])
+                        ALTER TABLE [docUpload].[OCRMappedData]  WITH CHECK ADD  CONSTRAINT [FK_OCRMappedData_MenuItem] FOREIGN KEY([Dbmenucode])
+                        REFERENCES [dbo].[MENUITEM] ([menucode])
                         
                         ALTER TABLE [docUpload].[OCRMappedData] CHECK CONSTRAINT [FK_OCRMappedData_MenuItem]
                     END
@@ -398,7 +398,7 @@ def match_ocr_products(
                 
                 # Now query the table
                 cursor.execute("""
-                    SELECT DbMcode, DbDesca 
+                    SELECT Dbmenucode, DbDesca 
                     FROM [docUpload].[OCRMappedData]
                     WHERE InvoiceProductName = ? AND InvoiceSupplierName = ?
                 """, (sku_query, supplier_name))
@@ -406,7 +406,7 @@ def match_ocr_products(
                 if row:
                     mapped_match = {
                         'desca': row[1] if row[1] else row[0],
-                        'mcode': row[0],
+                        'menucode': row[0],
                         'score': 100.0,  # Exact match
                         'rank': 1
                     }
@@ -483,7 +483,7 @@ def example_standalone_matching():
     
     print(f"Query: {query}")
     for match in matches:
-        print(f"  Rank {match['rank']}: {match['desca']} (Code: {match['mcode']}, Score: {match['score']})")
+        print(f"  Rank {match['rank']}: {match['desca']} (Code: {match['menucode']}, Score: {match['score']})")
     
     # Best match only
     best = matcher.get_best_match(query, score_cutoff=70.0)

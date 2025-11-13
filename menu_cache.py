@@ -69,7 +69,7 @@ class MenuItemCache:
         Load menu items into cache.
         
         Args:
-            menu_items: List of (desca, mcode) tuples from database
+            menu_items: List of (desca, menucode) tuples from database
             force: Force reload even if cache is valid
         """
         with self._lock:
@@ -101,7 +101,7 @@ class MenuItemCache:
         Get cached menu items.
         
         Returns:
-            List of (desca, mcode) tuples, or None if cache is invalid
+            List of (desca, menucode) tuples, or None if cache is invalid
         """
         if not self.is_valid():
             logger.warning("Cache is invalid or expired")
@@ -171,13 +171,13 @@ def get_cached_menu_items(
         force_refresh: Force database query even if cache is valid
     
     Returns:
-        List of (desca, mcode) tuples
+        List of (desca, menucode) tuples
     
     Example:
         def fetch_from_db():
             conn = get_connection()
             cursor = conn.cursor()
-            cursor.execute("SELECT desca, mcode FROM menuitem")
+            cursor.execute("SELECT desca, menucode FROM menuitem")
             items = cursor.fetchall()
             cursor.close()
             conn.close()

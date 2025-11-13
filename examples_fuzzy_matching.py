@@ -22,9 +22,9 @@ def example_1_basic_match():
     
     # Sample database data
     menu_items = [
-        ("LACTOGEN PRO 1 BIB 24x400g INNWPB176", "MCODE_001"),
-        ("LACTOGEN PRO 2 BIB 24x400g INLEB086", "MCODE_002"),
-        ("NESCAFE CLASSIC INSTANT COFFEE 100g", "MCODE_003"),
+        ("LACTOGEN PRO 1 BIB 24x400g INNWPB176", "menucode_001"),
+        ("LACTOGEN PRO 2 BIB 24x400g INLEB086", "menucode_002"),
+        ("NESCAFE CLASSIC INSTANT COFFEE 100g", "menucode_003"),
     ]
     
     # Initialize matcher
@@ -41,7 +41,7 @@ def example_1_basic_match():
     if best:
         print(f"✓ Best Match Found:")
         print(f"  Database: {best['desca']}")
-        print(f"  Code: {best['mcode']}")
+        print(f"  Code: {best['menucode']}")
         print(f"  Confidence: {best['score']}%")
     else:
         print("✗ No match found above threshold")
@@ -58,10 +58,10 @@ def example_2_multiple_suggestions():
     print("=" * 80)
     
     menu_items = [
-        ("NESCAFE CLASSIC INSTANT COFFEE 100g JAR", "MCODE_101"),
-        ("NESCAFE CLASSIC INSTANT COFFEE 50g POUCH", "MCODE_102"),
-        ("NESCAFE GOLD INSTANT COFFEE 100g JAR", "MCODE_103"),
-        ("NESCAFE GOLD BLEND 50g REFILL", "MCODE_104"),
+        ("NESCAFE CLASSIC INSTANT COFFEE 100g JAR", "menucode_101"),
+        ("NESCAFE CLASSIC INSTANT COFFEE 50g POUCH", "menucode_102"),
+        ("NESCAFE GOLD INSTANT COFFEE 100g JAR", "menucode_103"),
+        ("NESCAFE GOLD BLEND 50g REFILL", "menucode_104"),
     ]
     
     matcher = FuzzyMatcher()
@@ -76,7 +76,7 @@ def example_2_multiple_suggestions():
     print(f"\nTop Suggestions:")
     for match in matches:
         print(f"  {match['rank']}. {match['desca']}")
-        print(f"     Code: {match['mcode']}, Score: {match['score']}%")
+        print(f"     Code: {match['menucode']}, Score: {match['score']}%")
 
 
 # ========================================
@@ -109,10 +109,10 @@ def example_3_ocr_integration():
     
     # Database menu items
     menu_items = [
-        ("LACTOGEN PRO 1 BIB 24x400g INNWPB176", "MCODE_001"),
-        ("LACTOGEN PRO 2 BIB 24x400g INLEB086", "MCODE_002"),
-        ("NESCAFE CLASSIC INSTANT COFFEE 100g", "MCODE_003"),
-        ("NESCAFE GOLD INSTANT COFFEE 100g", "MCODE_004"),
+        ("LACTOGEN PRO 1 BIB 24x400g INNWPB176", "menucode_001"),
+        ("LACTOGEN PRO 2 BIB 24x400g INLEB086", "menucode_002"),
+        ("NESCAFE CLASSIC INSTANT COFFEE 100g", "menucode_003"),
+        ("NESCAFE GOLD INSTANT COFFEE 100g", "menucode_004"),
     ]
     
     # Apply fuzzy matching
@@ -132,7 +132,7 @@ def example_3_ocr_integration():
         if product['best_match']:
             print(f"\n✓ Best Match:")
             print(f"  Database: {product['best_match']['desca']}")
-            print(f"  Code: {product['best_match']['mcode']}")
+            print(f"  Code: {product['best_match']['menucode']}")
             print(f"  Score: {product['best_match']['score']}%")
             print(f"  Confidence: {product['match_confidence']}")
         else:
@@ -193,8 +193,8 @@ def example_5_edge_cases():
     print("=" * 80)
     
     menu_items = [
-        ("PRODUCT ABC 123", "MCODE_001"),
-        ("PRODUCT XYZ 456", "MCODE_002"),
+        ("PRODUCT ABC 123", "menucode_001"),
+        ("PRODUCT XYZ 456", "menucode_002"),
     ]
     
     matcher = FuzzyMatcher()
@@ -239,8 +239,8 @@ def example_6_cache_usage():
         import time
         time.sleep(0.1)  # Simulate DB latency
         return [
-            ("PRODUCT A", "MCODE_A"),
-            ("PRODUCT B", "MCODE_B"),
+            ("PRODUCT A", "menucode_A"),
+            ("PRODUCT B", "menucode_B"),
         ]
     
     # First call - cache miss

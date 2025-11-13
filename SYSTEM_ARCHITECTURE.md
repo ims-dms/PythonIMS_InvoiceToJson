@@ -44,7 +44,7 @@
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                    DATABASE QUERY (db_connection.py)                     │
 │                                                                           │
-│  SELECT desca, mcode FROM menuitem                                       │
+│  SELECT desca, menucode FROM menuitem                                       │
 └────────────────────────────────┬─────────────────────────────────────────┘
                                  │
                                  ▼
@@ -66,8 +66,8 @@
                                  ▼
                         Menu Items List
                     [
-                      ("LACTOGEN PRO 1 BIB 24x400g", "MCODE_001"),
-                      ("LACTOGEN PRO 2 BIB 24x400g", "MCODE_002"),
+                      ("LACTOGEN PRO 1 BIB 24x400g", "menucode_001"),
+                      ("LACTOGEN PRO 2 BIB 24x400g", "menucode_002"),
                       ...
                       (700,000 items)
                     ]
@@ -99,7 +99,7 @@
                         "fuzzy_matches": [
                           {
                             "desca": "LACTOGEN PRO 1...",
-                            "mcode": "MCODE_001",
+                            "menucode": "menucode_001",
                             "score": 94.59,
                             "rank": 1
                           },
@@ -126,7 +126,7 @@
 │                      CLIENT DECISION LOGIC                               │
 │                                                                           │
 │  IF match_confidence == "high" (score ≥ 85):                             │
-│    → Auto-accept best_match.mcode                                        │
+│    → Auto-accept best_match.menucode                                        │
 │                                                                           │
 │  ELIF match_confidence in ["medium", "low"] (score 60-84):               │
 │    → Show fuzzy_matches to user for selection                            │
@@ -207,14 +207,14 @@ Input: "LACTOGEN PRO1 BIB 24x400g INNWPB176 NP"
         Match Results (sorted by score)
 ┌──────────────────────────────────────────────────────┐
 │ Rank 1: "LACTOGEN PRO 1 BIB 24x400g INNWPB176"      │
-│         MCODE_001, Score: 94.59                     │
+│         menucode_001, Score: 94.59                     │
 │         ↑ Best Match                                 │
 ├──────────────────────────────────────────────────────┤
 │ Rank 2: "LACTOGEN PRO 2 BIB 24x400g INLEB086"      │
-│         MCODE_002, Score: 72.35                     │
+│         menucode_002, Score: 72.35                     │
 ├──────────────────────────────────────────────────────┤
 │ Rank 3: "LACTOGEN PRO 3 FOLLOW UP 400g"            │
-│         MCODE_003, Score: 65.12                     │
+│         menucode_003, Score: 65.12                     │
 └──────────────────────────────────────────────────────┘
                         │
                         ▼
@@ -223,7 +223,7 @@ Input: "LACTOGEN PRO1 BIB 24x400g INNWPB176 NP"
 │ Best match score: 94.59                             │
 │ 94.59 ≥ 85 → Confidence: "high"                     │
 │                                                       │
-│ Decision: Auto-accept MCODE_001                      │
+│ Decision: Auto-accept menucode_001                      │
 └──────────────────────────────────────────────────────┘
 ```
 
@@ -275,10 +275,10 @@ Input: "LACTOGEN PRO1 BIB 24x400g INNWPB176 NP"
 ### Menu Items (Database)
 ```python
 [
-    ("LACTOGEN PRO 1 BIB 24x400g INNWPB176", "MCODE_001"),
-    ("LACTOGEN PRO 2 BIB 24x400g INLEB086", "MCODE_002"),
+    ("LACTOGEN PRO 1 BIB 24x400g INNWPB176", "menucode_001"),
+    ("LACTOGEN PRO 2 BIB 24x400g INLEB086", "menucode_002"),
     ...
-    # 700,000 tuples (desca, mcode)
+    # 700,000 tuples (desca, menucode)
 ]
 ```
 
@@ -310,7 +310,7 @@ Input: "LACTOGEN PRO1 BIB 24x400g INNWPB176 NP"
         "fuzzy_matches": [
             {
                 "desca": "LACTOGEN PRO 1 BIB 24x400g INNWPB176",
-                "mcode": "MCODE_001",
+                "menucode": "menucode_001",
                 "score": 94.59,
                 "rank": 1
             },
