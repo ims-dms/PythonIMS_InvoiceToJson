@@ -374,7 +374,7 @@ async def process_invoice(
                     conn = get_connection()
                 
                 cursor = conn.cursor()
-                cursor.execute("SELECT desca, mcode FROM menuitem")
+                cursor.execute("SELECT desca, mcode FROM menuitem where type = 'A'")
                 items = cursor.fetchall()
                 cursor.close()
                 conn.close()
