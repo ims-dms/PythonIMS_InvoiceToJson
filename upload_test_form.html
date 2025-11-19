@@ -23,10 +23,25 @@
 </head>
 <body>
     <h1>Upload File to /extract Endpoint</h1>
+    <div style="background-color: #fff3cd; padding: 10px; margin-bottom: 20px; border-radius: 4px;">
+        <p><strong>NOTE:</strong> Company ID must be registered in the database. Default test ID is <strong>NT047</strong></p>
+        <p>If you get "No active token found", check that your Company ID is in the database.</p>
+    </div>
     <form action="http://127.0.0.1:8000/extract" method="post" enctype="multipart/form-data">
-    <input type="file" name="file" required />
-    <button id="uploadBtn" type="submit">Upload</button>
-    <span id="spinner" class="spinner"></span>
+        <div>
+            <label for="companyID">Company ID:</label>
+            <input type="text" name="companyID" id="companyID" required placeholder="e.g., NT047" value="NT047" />
+        </div>
+        <div>
+            <label for="username">Username:</label>
+            <input type="text" name="username" id="username" required placeholder="e.g., testuser" value="testuser" />
+        </div>
+        <div>
+            <label for="file">PDF File:</label>
+            <input type="file" name="file" id="file" required />
+        </div>
+        <button id="uploadBtn" type="submit">Upload</button>
+        <span id="spinner" class="spinner"></span>
     </form>
     <script>
         const form = document.querySelector('form');

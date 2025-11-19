@@ -8,3 +8,4 @@ pyodbc
 pdf2image
 PyMuPDF
 requests
+tenacity

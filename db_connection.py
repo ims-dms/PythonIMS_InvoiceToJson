@@ -1,5 +1,8 @@
 import json
 import pyodbc
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Mapping of possible keys to standard keys
 KEY_MAPPING = {
@@ -48,11 +51,73 @@ def get_connection(connection_params: dict = None):
 
     try:
         connection = pyodbc.connect(conn_str)
-        print("Database connection successful")
         return connection
     except Exception as e:
-        print(f"Error connecting to database: {e}")
+        logger.error(f"Error connecting to database: {e}")
         raise
+
+def create_token_tables(connection=None):
+    """Create TokenMaster, TokenUsageLogs, and TokenUsageSummary tables if they don't exist."""
+    if connection is None:
+        connection = get_connection()
+    
+    cursor = connection.cursor()
+    
+    try:
+        # Create TokenMaster table
+        cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='TokenMaster' AND xtype='U')
+            CREATE TABLE TokenMaster (
+                TokenID INT IDENTITY(1,1) PRIMARY KEY,
+                CompanyID VARCHAR(50),
+                CompanyName VARCHAR(200),
+                ApiKey VARCHAR(500),
+                Provider VARCHAR(100),
+                TotalTokenLimit INT,
+                Status VARCHAR(50),
+                CreatedAt DATETIME DEFAULT GETDATE()
+            )
+        """)
+        connection.commit()
+        
+        # Create TokenUsageLogs table
+        cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='TokenUsageLogs' AND xtype='U')
+            CREATE TABLE TokenUsageLogs (
+                UsageID INT IDENTITY(1,1) PRIMARY KEY,
+                TokenID INT FOREIGN KEY REFERENCES TokenMaster(TokenID),
+                Branch VARCHAR(50),
+                RequestedBy VARCHAR(100),
+                InputTokens INT,
+                OutputTokens INT,
+                TextPromptTokens INT,
+                ImagePromptTokens INT,
+                TextCandidatesTokens INT,
+                TotalTokensUsed INT,
+                RequestCount INT,
+                LoggedAt DATETIME DEFAULT GETDATE()
+            )
+        """)
+        connection.commit()
+        
+        # Create TokenUsageSummary table
+        cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='TokenUsageSummary' AND xtype='U')
+            CREATE TABLE TokenUsageSummary (
+                SummaryID INT IDENTITY(1,1) PRIMARY KEY,
+                TokenID INT FOREIGN KEY REFERENCES TokenMaster(TokenID),
+                TotalUsedTokens INT DEFAULT 0,
+                TotalRemainingTokens INT,
+                Threshold INT DEFAULT 3000,
+                LastUpdated DATETIME DEFAULT GETDATE()
+            )
+        """)
+        connection.commit()
+        
+    except Exception as e:
+        logger.debug(f"Table creation info: {e}")
+    finally:
+        cursor.close()
 
 if __name__ == "__main__":
     # Test the connection

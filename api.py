@@ -13,16 +13,16 @@ from pydantic_ai import Agent, BinaryContent
 from pydantic_ai.models.gemini import GeminiModel
 from pydantic_ai.providers.google_gla import GoogleGLAProvider
 import requests
-from db_connection import get_connection
+from db_connection import get_connection, create_token_tables
+from token_manager import TokenManager
+from retry_policy import RetryPolicy, RetryConfig
+from db_logger import ApplicationLogger, log_retry_attempts
 from fuzzy_matcher import match_ocr_products, format_api_response, minimize_error_message, api_error_response
 from menu_cache import get_cached_menu_items, get_cache_stats, invalidate_cache
 
-# Configure logging
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Configure application logging
+ApplicationLogger.configure(log_level=logging.INFO)
+logger = ApplicationLogger.get_logger(__name__)
 
 load_dotenv()
 
@@ -44,10 +44,115 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize Gemini
+# Debug endpoint to inspect tokens in database and help diagnose "No active token" errors
+@app.get("/debug/tokens")
+def debug_tokens(companyID: str | None = None):
+    """Return token diagnostic information.
+    Optional query param 'companyID' to filter.
+    Example: /debug/tokens?companyID=NT047
+    """
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        if companyID:
+            cid = companyID.strip()
+            cur.execute("""
+                SELECT TokenID, CompanyID, CompanyName, Status, Provider, TotalTokenLimit, CreatedAt
+                FROM TokenMaster WHERE CompanyID = ?
+            """, (cid,))
+        else:
+            cur.execute("""
+                SELECT TokenID, CompanyID, CompanyName, Status, Provider, TotalTokenLimit, CreatedAt
+                FROM TokenMaster ORDER BY CompanyID
+            """)
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return {
+            "status": "ok",
+            "filter_companyID": companyID,
+            "count": len(rows),
+            "tokens": [
+                {
+                    "token_id": r[0],
+                    "company_id": r[1],
+                    "company_name": r[2],
+                    "status": r[3],
+                    "provider": r[4],
+                    "total_limit": r[5],
+                    "created_at": r[6].isoformat() if r[6] else None,
+                } for r in rows
+            ]
+        }
+    except Exception as e:
+        logger.error(f"/debug/tokens error: {e}")
+        return {"status": "error", "message": f"Failed to retrieve tokens: {e}"}
 
-# Read GEMINI_API_KEY from appSetting.txt
+# Echo endpoint to see exactly what the server receives (query + form + headers minimal)
+@app.post("/debug/echo")
+async def debug_echo(
+    companyID: str = Form(None),
+    username: str = Form(None),
+    request_file: UploadFile | None = File(None)
+):
+    from fastapi import Request
+    # We need the raw Request object; FastAPI will inject if we declare parameter
+    # But to keep existing signature small, fetch via dependency in closure
+    # (Simpler: accept Request as parameter)
+
+from fastapi import Request
+
+@app.post("/debug/echo-full")
+async def debug_echo_full(request: Request,
+                          companyID: str = Form(None),
+                          username: str = Form(None)):
+    # Read raw body (form has been parsed already; body read may be empty for multipart)
+    try:
+        raw = await request.body()
+    except Exception:
+        raw = b''
+    headers = {k: v for k, v in request.headers.items() if k.lower() in ["content-type","user-agent","content-length"]}
+    logger.info(f"ECHO companyID='{companyID}', username='{username}' raw_len={len(raw)} headers={headers}")
+    return {
+        "received": {
+            "companyID": companyID,
+            "username": username,
+            "raw_body_preview": raw[:200].decode(errors='ignore'),
+            "raw_body_length": len(raw),
+            "headers": headers
+        }
+    }
+
+@app.get("/debug/company-list")
+def debug_company_list(limit: int = 20):
+    """List up to 'limit' company IDs from Company and matching tokens.
+    Helps verify DB connection and available IDs.
+    """
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        companies = []
+        try:
+            cur.execute("SELECT TOP (?) CompanyID FROM Company ORDER BY CompanyID", (limit,))
+            companies = [r[0] for r in cur.fetchall()]
+        except Exception as e:
+            logger.warning(f"Company table query failed: {e}")
+        tokens = {}
+        try:
+            cur.execute("SELECT CompanyID, Status, COUNT(*) AS cnt FROM TokenMaster GROUP BY CompanyID, Status")
+            for cid, status, cnt in cur.fetchall():
+                tokens.setdefault(cid, {}).update({status: cnt})
+        except Exception as e:
+            logger.warning(f"TokenMaster summary query failed: {e}")
+        cur.close(); conn.close()
+        return {"status":"ok","company_ids":companies,"token_summary":tokens}
+    except Exception as e:
+        logger.error(f"/debug/company-list error: {e}")
+        return {"status":"error","message":str(e)}
+
+# Initialize Gemini with token from database or fallback to appSetting.txt
 def read_api_key_from_file(file_path='appSetting.txt'):
+    """Read GEMINI_API_KEY from appSetting.txt"""
     try:
         with open(file_path, 'r') as f:
             for line in f:
@@ -57,11 +162,24 @@ def read_api_key_from_file(file_path='appSetting.txt'):
         raise RuntimeError(f"Failed to read API key from {file_path}: {e}")
     raise ValueError("GEMINI_API_KEY not found in appSetting.txt")
 
-GEMINI_API_KEY = read_api_key_from_file()
-
-provider = GoogleGLAProvider(api_key=GEMINI_API_KEY)
-model = GeminiModel('gemini-2.0-flash-lite', provider=provider)
-gemini_agent = Agent(model)
+def get_gemini_model_and_api_key(company_id: str):
+    """Return Gemini model and API key strictly from database.
+    No fallback to appSetting.txt. Returns explicit status errors.
+    """
+    token_info = TokenManager.get_active_token(company_id)
+    if not token_info.get('success'):
+        # Bubble up structured token error
+        raise HTTPException(status_code=400, detail={
+            "status": "error",
+            "token_error": token_info.get('error'),
+            "message": token_info.get('message'),
+            "company_id": company_id,
+            "statuses_present": token_info.get('statuses_present')
+        })
+    api_key = token_info.get('api_key')
+    provider = GoogleGLAProvider(api_key=api_key)
+    model = GeminiModel('gemini-2.0-flash-lite', provider=provider)
+    return model, api_key, token_info
 
 PROCESSING_PROMPT = """
 Extract data from ALL PAGES of the TAX INVOICE document following these strict rules. Combine information from all provided images/pages into a single cohesive JSON output:
@@ -195,257 +313,374 @@ def normalize_arrays(data: dict) -> dict:
 
 @app.post("/extract")
 async def process_invoice(
+    request: Request,
     file: UploadFile = File(None),
     companyID: str = Form(...),
     username: str = Form(...),
+    branch: str = Form(None),
     licenceID: str = Form(None),
     connection_params: str = Form(None),  # New parameter for connection parameters as JSON string
     extractFromLink: int = Form(0),
     pdf_url: str = Form(None)
 ):
+    """
+    Process invoice with token management and retry logic
+    """
+    # Log raw request meta for debugging companyID mismatch issues
+    try:
+        headers_subset = {k: v for k, v in request.headers.items() if k.lower() in ["content-type","user-agent","content-length"]}
+        logger.info(f"RAW REQUEST META headers={headers_subset} client={request.client}")
+    except Exception as e:
+        logger.debug(f"Failed to capture raw headers: {e}")
+
+    # Clean up form inputs to remove any leading/trailing whitespace
+    companyID = companyID.strip() if companyID else companyID
+    username = username.strip() if username else username
+    
+    logger.info(f"RECEIVED REQUEST: companyID='{companyID}' (len={len(companyID) if companyID else 0}), username='{username}'")
+    
     if not companyID or not username:
         return format_api_response(
             message="Please provide both companyID and username.",
             status="error"
         )
     
-    if extractFromLink == 1:
-        if not pdf_url:
-            return format_api_response(
-                message="pdf_url is required when extractFromLink=1",
-                status="error"
-            )
-        try:
-            response = requests.get(pdf_url)
-            response.raise_for_status()
-            file_content = response.content
-            file_name = pdf_url.split('/')[-1].split('?')[0]  # Extract filename from URL
-            content_type = "application/pdf"  # Assume PDF
-        except requests.RequestException as e:
-            return format_api_response(
-                message="Failed to download PDF from URL",
-                data={"actual_error": str(e)},
-                status="error"
-            )
-    else:
-        if not file:
-            return format_api_response(
-                message="file is required when extractFromLink=0",
-                status="error"
-            )
-        file_content = await file.read()
-        file_name = file.filename
-        content_type = file.content_type
-
+    # Initialize token info
+    token_info = None
+    token_id = None
+    retry_policy = None
+    
     try:
-        # Handle PDFs (convert all pages to images) or other single binary attachments
-        binary_contents = []
-        if content_type == "application/pdf":
-            try:
-                images = convert_pdf_bytes_to_pngs(file_content)
-                logger.info(f"Converted {len(images)} pages from PDF")
-            except Exception as e:
-                logger.error(f"PDF conversion failed: {e}")
+        # Get active token (this will also validate token exists and is active)
+        logger.info(f"LOOKING UP TOKEN for companyID='{companyID}'")
+        token_result = TokenManager.get_active_token(companyID)
+        logger.info(f"TOKEN LOOKUP RESULT: {token_result}")
+        if not token_result.get('success'):
+            logger.warning(f"TOKEN LOOKUP FAILED for company {companyID}: {token_result.get('message')}")
+            return format_api_response(
+                message=token_result.get('message'),
+                status="error"
+            )
+        
+        token_info = token_result
+        token_id = token_info.get('token_id')
+        logger.info(f"Token {token_id} selected for company {companyID}")
+    
+    except Exception as e:
+        logger.error(f"Token retrieval error: {e}")
+        return format_api_response(
+            message="Failed to retrieve API token. Please contact support.",
+            status="error"
+        )
+    
+    try:
+        # Initialize retry policy
+        retry_config = RetryConfig(
+            max_retries=3,
+            initial_delay=1.0,
+            max_delay=30.0,
+            backoff_multiplier=2.0,
+            jitter=True
+        )
+        retry_policy = RetryPolicy(retry_config)
+        
+        # Get file content
+        if extractFromLink == 1:
+            if not pdf_url:
                 return format_api_response(
-                    message="Failed to convert PDF",
+                    message="pdf_url is required when extractFromLink=1",
+                    status="error"
+                )
+            try:
+                response = requests.get(pdf_url)
+                response.raise_for_status()
+                file_content = response.content
+                file_name = pdf_url.split('/')[-1].split('?')[0]
+                content_type = "application/pdf"
+            except requests.RequestException as e:
+                logger.error(f"Failed to download PDF from URL: {e}")
+                return format_api_response(
+                    message="Failed to download PDF from URL",
                     data={"actual_error": str(e)},
                     status="error"
                 )
-            # Use the first page's base64 for any logging/preview purposes
-            first_img_bytes, first_media = images[0]
-            image_base64 = base64.b64encode(first_img_bytes).decode('utf-8')
-            for img_bytes, media in images:
-                binary_contents.append(BinaryContent(img_bytes, media_type=media))
         else:
-            media_type = content_type or 'application/octet-stream'
-            image_base64 = base64.b64encode(file_content).decode('utf-8')
-            binary_contents.append(BinaryContent(file_content, media_type=media_type))
-
-        # Build agent inputs: prompt followed by all BinaryContent attachments (one per page)
-        agent_inputs = [PROCESSING_PROMPT] + binary_contents
-        logger.info(f"Sending {len(binary_contents)} images to Gemini for processing")
-
-        result = await gemini_agent.run(agent_inputs)
-        usage = result.usage()
-        usage_info = f"Gemini processing complete. Usage: {usage}"
-        logger.info(usage_info)
-
-        # Extract the actual response text from the result
-        # pydantic_ai AgentRunResult has 'output' attribute, not 'data'
-        raw_response = result.output if hasattr(result, 'output') else str(result)
-        logger.info(f"Gemini response length: {len(raw_response)} chars")
-        logger.info(f"First 500 chars of response: {raw_response[:500]}")
-
-        try:
-            # Try to parse the response as JSON
-            # First, try to extract JSON from markdown code blocks (Gemini often wraps in ```json ... ```)
-            json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', raw_response, re.DOTALL)
-            if json_match:
-                json_str = json_match.group(1).strip()
-                logger.info(f"Found JSON in markdown code block")
-            else:
-                # Try to find raw JSON object (match outer braces with everything inside)
-                json_match = re.search(r'\{.*\}', raw_response, re.DOTALL)
-                if json_match:
-                    json_str = json_match.group(0).strip()
-                    logger.info(f"Found raw JSON object")
-                else:
-                    logger.error(f"No JSON found in response. Full response: {raw_response}")
-                    raise ValueError(f"No JSON found in Gemini response. Response preview: {raw_response[:500]}")
-            
-            logger.debug(f"JSON string to parse (first 300 chars): {json_str[:300]}")
-            data = json.loads(json_str)
-            logger.info(f"Successfully parsed JSON with {len(data)} top-level keys: {list(data.keys())[:10]}")
-
-            def normalize_key(k):
-                return k.replace(" ", "").replace("_", "").lower()
-
-            normalized_data = {}
-            for key, value in data.items():
-                normalized_data[normalize_key(key)] = value
-
-            if not validate_response_structure(data):
-                raise ValueError("Response missing required fields")
-
-            data = normalize_arrays(data)
-
-            data['sku'] = data.get('sku', [])
-            data['brands'] = [sku.split()[0] if sku else "" for sku in data.get('sku', [])]
-
-            products = []
-            sku_list = data.get('sku', [])
-            sku_code_list = data.get('sku_code', [])
-            quantity_list = data.get('quantity', [])
-            shortage_list = data.get('shortage', [])
-            breakage_list = data.get('breakage', [])
-            leakage_list = data.get('leakage', [])
-            batch_list = normalized_data.get('batch') or []
-            sno_list = data.get('sno', [])
-            rate_list = normalized_data.get('rate') or []
-            discount_list = data.get('discount', [])
-            mrp_list = normalized_data.get('mrp') or normalized_data.get('mrpvalue') or []
-            vat_list = normalized_data.get('vat') or normalized_data.get('vatvalue') or []
-            hscode_list = normalized_data.get('hscode') or normalized_data.get('hs_code') or []
-            altqty_list = normalized_data.get('altqty') or normalized_data.get('altquantity') or []
-            unit_list = normalized_data.get('unit') or normalized_data.get('unitofmeasure') or normalized_data.get('uom') or []
-
-            max_len = max(
-                len(sku_list), len(sku_code_list), len(quantity_list), len(shortage_list),
-                len(breakage_list), len(leakage_list), len(batch_list),
-                len(sno_list), len(rate_list), len(discount_list),
-                len(mrp_list), len(vat_list), len(hscode_list),
-                len(altqty_list), len(unit_list)
+            if not file:
+                return format_api_response(
+                    message="file is required when extractFromLink=0",
+                    status="error"
+                )
+            file_content = await file.read()
+            file_name = file.filename
+            content_type = file.content_type
+        
+        # Validate file content
+        if not file_content:
+            return format_api_response(
+                message="File is empty",
+                status="error"
             )
-
-            for i in range(max_len):
-                product = {
-                    "sku": sku_list[i] if i < len(sku_list) else "",
-                    "sku_code": sku_code_list[i] if i < len(sku_code_list) else "",
-                    "quantity": quantity_list[i] if i < len(quantity_list) else 0,
-                    "shortage": shortage_list[i] if i < len(shortage_list) else 0,
-                    "breakage": breakage_list[i] if i < len(breakage_list) else 0,
-                    "leakage": leakage_list[i] if i < len(leakage_list) else 0,
-                    "batch": batch_list[i] if i < len(batch_list) else "",
-                    "sno": sno_list[i] if i < len(sno_list) else "",
-                    "rate": rate_list[i] if i < len(rate_list) else 0,
-                    "discount": discount_list[i] if i < len(discount_list) else 0,
-                    "mrp": mrp_list[i] if i < len(mrp_list) else 0,
-                    "vat": vat_list[i] if i < len(vat_list) else 0,
-                    "hscode": hscode_list[i] if i < len(hscode_list) else "",
-                    "altQty": altqty_list[i] if i < len(altqty_list) else 0,
-                    "unit": unit_list[i] if i < len(unit_list) else ""
-                }
-                products.append(product)
-
-            logger.debug(f"Raw SKU data from Gemini response: {data.get('sku', [])}")
-
-            # Fetch menu items using intelligent caching (critical for 700k items)
-            import json as json_lib
+        
+        # Convert PDF to images
+        try:
+            binary_contents = []
+            if content_type == "application/pdf":
+                try:
+                    images = convert_pdf_bytes_to_pngs(file_content)
+                    logger.info(f"Converted {len(images)} pages from PDF")
+                except Exception as e:
+                    logger.error(f"PDF conversion failed: {e}")
+                    return format_api_response(
+                        message="Failed to convert PDF",
+                        data={"actual_error": str(e)},
+                        status="error"
+                    )
+                
+                first_img_bytes, first_media = images[0]
+                for img_bytes, media in images:
+                    binary_contents.append(BinaryContent(img_bytes, media_type=media))
+            else:
+                media_type = content_type or 'application/octet-stream'
+                binary_contents.append(BinaryContent(file_content, media_type=media_type))
             
-            def fetch_menu_items_from_db():
-                """Fetch menu items from database - only called on cache miss."""
+            # Build agent inputs
+            agent_inputs = [PROCESSING_PROMPT] + binary_contents
+            
+            # Get Gemini model with retry logic
+            async def process_with_gemini():
+                model, api_key, _ = get_gemini_model_and_api_key(companyID)
+                gemini_agent = Agent(model)
+                logger.info(f"Sending {len(binary_contents)} images to Gemini for processing")
+                result = await gemini_agent.run(agent_inputs)
+                return result
+            
+            # Execute with retry policy
+            logger.info("Starting Gemini processing with retry policy...")
+            result = await retry_policy.execute_with_retry(process_with_gemini)
+            
+            # Get usage information
+            usage = result.usage()
+            usage_info = f"Gemini processing complete. Usage: {usage}"
+            logger.info(usage_info)
+            
+            # Extract usage details and log to database
+            usage_details = TokenManager.extract_usage_from_log(usage_info)
+            if usage_details and token_id:
+                log_result = TokenManager.log_token_usage(
+                    token_id=token_id,
+                    usage_info=usage_details,
+                    branch=branch,
+                    requested_by=username
+                )
+                if not log_result.get('success'):
+                    logger.warning(f"Failed to log token usage: {log_result.get('message')}")
+            
+            # Log retry attempts if any occurred
+            if retry_policy.retry_count > 0:
+                log_retry_attempts(
+                    retry_policy.get_retry_log(),
+                    token_id=token_id,
+                    company_id=companyID
+                )
+                logger.info(f"Retry attempts logged: {retry_policy.retry_count}")
+            
+            # Extract and process response
+            raw_response = result.output if hasattr(result, 'output') else str(result)
+            logger.info(f"Gemini response length: {len(raw_response)} chars")
+            
+            try:
+                # Parse JSON response
+                json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', raw_response, re.DOTALL)
+                if json_match:
+                    json_str = json_match.group(1).strip()
+                    logger.info("Found JSON in markdown code block")
+                else:
+                    json_match = re.search(r'\{.*\}', raw_response, re.DOTALL)
+                    if json_match:
+                        json_str = json_match.group(0).strip()
+                        logger.info("Found raw JSON object")
+                    else:
+                        logger.error(f"No JSON found in response")
+                        raise ValueError(f"No JSON found in Gemini response")
+                
+                data = json.loads(json_str)
+                logger.info(f"Successfully parsed JSON with {len(data)} top-level keys")
+                
+                # Normalize and process data
+                def normalize_key(k):
+                    return k.replace(" ", "").replace("_", "").lower()
+                
+                normalized_data = {}
+                for key, value in data.items():
+                    normalized_data[normalize_key(key)] = value
+                
+                if not validate_response_structure(data):
+                    raise ValueError("Response missing required fields")
+                
+                data = normalize_arrays(data)
+                data['sku'] = data.get('sku', [])
+                data['brands'] = [sku.split()[0] if sku else "" for sku in data.get('sku', [])]
+                
+                # Process products
+                products = []
+                sku_list = data.get('sku', [])
+                sku_code_list = data.get('sku_code', [])
+                quantity_list = data.get('quantity', [])
+                shortage_list = data.get('shortage', [])
+                breakage_list = data.get('breakage', [])
+                leakage_list = data.get('leakage', [])
+                batch_list = normalized_data.get('batch') or []
+                sno_list = data.get('sno', [])
+                rate_list = normalized_data.get('rate') or []
+                discount_list = data.get('discount', [])
+                mrp_list = normalized_data.get('mrp') or normalized_data.get('mrpvalue') or []
+                vat_list = normalized_data.get('vat') or normalized_data.get('vatvalue') or []
+                hscode_list = normalized_data.get('hscode') or normalized_data.get('hs_code') or []
+                altqty_list = normalized_data.get('altqty') or normalized_data.get('altquantity') or []
+                unit_list = normalized_data.get('unit') or normalized_data.get('unitofmeasure') or normalized_data.get('uom') or []
+                
+                max_len = max(
+                    len(sku_list), len(sku_code_list), len(quantity_list), len(shortage_list),
+                    len(breakage_list), len(leakage_list), len(batch_list),
+                    len(sno_list), len(rate_list), len(discount_list),
+                    len(mrp_list), len(vat_list), len(hscode_list),
+                    len(altqty_list), len(unit_list)
+                )
+                
+                for i in range(max_len):
+                    product = {
+                        "sku": sku_list[i] if i < len(sku_list) else "",
+                        "sku_code": sku_code_list[i] if i < len(sku_code_list) else "",
+                        "quantity": quantity_list[i] if i < len(quantity_list) else 0,
+                        "shortage": shortage_list[i] if i < len(shortage_list) else 0,
+                        "breakage": breakage_list[i] if i < len(breakage_list) else 0,
+                        "leakage": leakage_list[i] if i < len(leakage_list) else 0,
+                        "batch": batch_list[i] if i < len(batch_list) else "",
+                        "sno": sno_list[i] if i < len(sno_list) else "",
+                        "rate": rate_list[i] if i < len(rate_list) else 0,
+                        "discount": discount_list[i] if i < len(discount_list) else 0,
+                        "mrp": mrp_list[i] if i < len(mrp_list) else 0,
+                        "vat": vat_list[i] if i < len(vat_list) else 0,
+                        "hscode": hscode_list[i] if i < len(hscode_list) else "",
+                        "altQty": altqty_list[i] if i < len(altqty_list) else 0,
+                        "unit": unit_list[i] if i < len(unit_list) else ""
+                    }
+                    products.append(product)
+                
+                logger.debug(f"Raw SKU data from Gemini response: {data.get('sku', [])}")
+                
+                # Fetch menu items using intelligent caching
+                import json as json_lib
+                
+                def fetch_menu_items_from_db():
+                    if connection_params:
+                        try:
+                            conn_params_dict = json_lib.loads(connection_params)
+                        except Exception as e:
+                            raise ValueError(f"Invalid connection_params JSON: {str(e)}")
+                        conn = get_connection(conn_params_dict)
+                    else:
+                        conn = get_connection()
+                    
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT desca, mcode, menucode FROM menuitem WHERE type = 'A'")
+                    items = cursor.fetchall()
+                    cursor.close()
+                    conn.close()
+                    return items
+                
+                logger.info("Retrieving menu items for fuzzy matching...")
+                menu_items = get_cached_menu_items(fetch_menu_items_from_db)
+                cache_stats = get_cache_stats()
+                logger.info(f"Menu items retrieved. Cache status: {cache_stats['status']}, "
+                           f"Count: {cache_stats['item_count']}, Age: {cache_stats['age_seconds']}s")
+                
+                # Get database connection for OCRMappedData lookup
                 if connection_params:
                     try:
                         conn_params_dict = json_lib.loads(connection_params)
                     except Exception as e:
-                        raise ValueError(f"Invalid connection_params JSON: {str(e)}")
-                    conn = get_connection(conn_params_dict)
+                        return format_api_response(
+                            message="Invalid connection parameters",
+                            data={"actual_error": str(e)},
+                            status="error"
+                        )
+                    db_conn = get_connection(conn_params_dict)
                 else:
-                    conn = get_connection()
+                    db_conn = get_connection()
                 
-                cursor = conn.cursor()
-                cursor.execute("SELECT desca, mcode, menucode FROM menuitem WHERE type = 'A'")
-                items = cursor.fetchall()
-                cursor.close()
-                conn.close()
-                return items
+                # Apply fuzzy matching to products
+                logger.info(f"Starting fuzzy matching for {len(products)} products...")
+                supplier_name = data.get('company_name', '')
+                products = match_ocr_products(
+                    ocr_products=products,
+                    menu_items=menu_items,
+                    top_k=3,
+                    score_cutoff=60.0,
+                    connection=db_conn,
+                    supplier_name=supplier_name
+                )
+                logger.info("Fuzzy matching completed successfully")
+                
+                db_conn.close()
+                
+                # Clean up response data
+                for key in ['sku', 'quantity', 'shortage', 'breakage', 'leakage', 'batch', 'sno', 'rate', 'discount', 'mrp', 'vat', 'brands']:
+                    data.pop(key, None)
+                
+                data['products'] = products
+                
+                for key in ['sku_code', 'hscode', 'altQty', 'unit', 'full_sku_names']:
+                    data.pop(key, None)
+                
+                return format_api_response(
+                    data=data,
+                    message="Invoice processed successfully",
+                    status="ok"
+                )
             
-            # Get menu items (from cache if available, otherwise fetch from DB)
-            logger.info("Retrieving menu items for fuzzy matching...")
-            menu_items = get_cached_menu_items(fetch_menu_items_from_db)
-            cache_stats = get_cache_stats()
-            logger.info(f"Menu items retrieved. Cache status: {cache_stats['status']}, "
-                       f"Count: {cache_stats['item_count']}, Age: {cache_stats['age_seconds']}s")
-
-            # Get database connection for OCRMappedData lookup
-            if connection_params:
-                try:
-                    conn_params_dict = json_lib.loads(connection_params)
-                except Exception as e:
-                    return format_api_response(
-                        message="Invalid connection parameters",
-                        data={"actual_error": str(e)},
-                        status="error"
-                    )
-                db_conn = get_connection(conn_params_dict)
-            else:
-                db_conn = get_connection()
-
-            # Apply fuzzy matching to products
-            logger.info(f"Starting fuzzy matching for {len(products)} products...")
-            supplier_name = data.get('company_name', '')
-            products = match_ocr_products(
-                ocr_products=products,
-                menu_items=menu_items,
-                top_k=3,  # Return top 3 suggestions per product
-                score_cutoff=60.0,  # Minimum match score of 60%
-                connection=db_conn,
-                supplier_name=supplier_name
-            )
-            logger.info("Fuzzy matching completed successfully")
-
-            # Close the connection
-            db_conn.close()
-
-            for key in ['sku', 'quantity', 'shortage', 'breakage', 'leakage', 'batch', 'sno', 'rate', 'discount', 'mrp', 'vat', 'brands']:
-                data.pop(key, None)
-
-            data['products'] = products
-
-            # Remove unwanted top-level fields as per user request
-            for key in ['sku_code', 'hscode', 'altQty', 'unit', 'full_sku_names']:
-                data.pop(key, None)
-
-            # Return success response with proper status
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.error(f"Processing error: {str(e)}")
+                return format_api_response(
+                    message="Failed to process invoice",
+                    data={"actual_error": str(e)},
+                    status="error"
+                )
+        
+        except Exception as e:
+            # Check if error is retryable
+            if retry_policy and not retry_policy.is_retryable_error(e):
+                logger.error(f"Non-retryable error: {str(e)}")
+                return format_api_response(
+                    message=minimize_error_message(str(e)),
+                    data={"actual_error": str(e)},
+                    status="error"
+                )
+            
+            # Log retry attempts if any
+            if retry_policy and retry_policy.retry_count > 0:
+                log_retry_attempts(
+                    retry_policy.get_retry_log(),
+                    token_id=token_id,
+                    company_id=companyID
+                )
+            
+            logger.error(f"Unexpected error: {str(e)}", exc_info=True)
+            error_detail = str(e)
+            user_message = minimize_error_message(error_detail)
+            
             return format_api_response(
-                data=data,
-                message="Invoice processed successfully",
-                status="ok"
-            )
-
-        except (json.JSONDecodeError, ValueError) as e:
-            logger.error(f"Processing error: {str(e)}")
-            return format_api_response(
-                message="Failed to process invoice",
-                data={"actual_error": str(e)},
+                message=user_message,
+                data={"actual_error": error_detail},
                 status="error"
             )
-
+    
     except Exception as e:
         # Insert failure record in tblOCRTokenDetails
         from datetime import date, datetime as dt
         current_date = date.today()
         current_time = dt.now().time()
+        
         try:
             conn = get_connection()
             cursor = conn.cursor()
@@ -489,9 +724,8 @@ async def process_invoice(
             conn.close()
         except Exception as ex:
             logger.error(f"Failed to log failure in tblOCRTokenDetails: {ex}")
-        logger.error(f"Unexpected error: {str(e)}", exc_info=True)
         
-        # Return formatted error response with minimized user message
+        logger.error(f"Unexpected error: {str(e)}", exc_info=True)
         error_detail = str(e)
         user_message = minimize_error_message(error_detail)
         
@@ -528,6 +762,17 @@ async def cache_invalidate():
     }
 
 import asyncio
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database tables and configurations on startup"""
+    try:
+        conn = get_connection()
+        create_token_tables(conn)
+        conn.close()
+        logger.info("Database tables initialized successfully")
+    except Exception as e:
+        logger.warning(f"Error initializing database tables: {e}")
 
 def process_invoice_sync(file_path: str, companyID: str, username: str, licenceID: str = None, connection_params: str = None):
     from fastapi import UploadFile
