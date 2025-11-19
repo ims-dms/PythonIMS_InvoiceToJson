@@ -20,8 +20,8 @@ from db_logger import ApplicationLogger, log_retry_attempts
 from fuzzy_matcher import match_ocr_products, format_api_response, minimize_error_message, api_error_response
 from menu_cache import get_cached_menu_items, get_cache_stats, invalidate_cache
 
-# Configure application logging
-ApplicationLogger.configure(log_level=logging.INFO)
+# Configure application logging (console output disabled by default to reduce noise)
+ApplicationLogger.configure(log_level=logging.INFO, console=False)
 logger = ApplicationLogger.get_logger(__name__)
 
 load_dotenv()
@@ -318,6 +318,7 @@ async def process_invoice(
     companyID: str = Form(...),
     username: str = Form(...),
     branch: str = Form(None),
+    Division: str = Form(None),
     licenceID: str = Form(None),
     connection_params: str = Form(None),  # New parameter for connection parameters as JSON string
     extractFromLink: int = Form(0),
@@ -333,11 +334,31 @@ async def process_invoice(
     except Exception as e:
         logger.debug(f"Failed to capture raw headers: {e}")
 
+    # Read raw form in a robust, case-insensitive way to capture Division/branch regardless of client casing
+    try:
+        raw_form = await request.form()
+        # Normalize keys to lowercase for lookup
+        form_map = {k.lower(): v for k, v in raw_form.items()}
+    except Exception:
+        form_map = {}
+
     # Clean up form inputs to remove any leading/trailing whitespace
-    companyID = companyID.strip() if companyID else companyID
-    username = username.strip() if username else username
-    
-    logger.info(f"RECEIVED REQUEST: companyID='{companyID}' (len={len(companyID) if companyID else 0}), username='{username}'")
+    companyID = (companyID.strip() if companyID else companyID) or (form_map.get('companyid') or form_map.get('companyid'.lower()))
+    username = username.strip() if username else (form_map.get('username') or form_map.get('requestedby'))
+    branch = branch.strip() if branch else None
+
+    # Try multiple possible keys for division/branch in incoming form (case-insensitive)
+    division_candidates = [
+        form_map.get('division'), form_map.get('divisionname'), form_map.get('branch'),
+        form_map.get('dept'), form_map.get('department')
+    ]
+    # prefer explicit Division param first, then candidates, then branch param
+    Division = (Division.strip() if Division else None) or next((c for c in division_candidates if c), None)
+
+    # Prefer explicit Division field if provided, otherwise fall back to branch
+    effective_branch = (Division or branch or 'Default')
+
+    logger.info(f"RECEIVED REQUEST: companyID='{companyID}' (len={len(companyID) if companyID else 0}), username='{username}', branch='{effective_branch}'")
     
     if not companyID or not username:
         return format_api_response(
@@ -469,7 +490,7 @@ async def process_invoice(
                 log_result = TokenManager.log_token_usage(
                     token_id=token_id,
                     usage_info=usage_details,
-                    branch=branch,
+                    branch=effective_branch,
                     requested_by=username
                 )
                 if not log_result.get('success'):

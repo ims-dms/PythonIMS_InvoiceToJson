@@ -100,32 +100,30 @@ class ApplicationLogger:
         return cls._instance
     
     @staticmethod
-    def configure(connection=None, log_level=logging.INFO):
+    def configure(connection=None, log_level=logging.INFO, console: bool = False):
         """
-        Configure application-wide logging to database and console.
-        
+        Configure application-wide logging to database. By default this will NOT add
+        a console StreamHandler to avoid verbose console output; pass `console=True`
+        to enable console logging (useful for local development).
+
         Args:
             connection: Database connection (optional)
             log_level: Logging level (default: INFO)
+            console: Whether to add a console StreamHandler (default: False)
         """
         if ApplicationLogger._handlers_configured:
             return
-        
+
         root_logger = logging.getLogger()
         root_logger.setLevel(log_level)
-        
-        # Remove existing handlers
+
+        # Remove existing handlers to avoid duplication
         for handler in root_logger.handlers[:]:
             root_logger.removeHandler(handler)
-        
-        # Create formatters
-        db_formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
-        console_formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
-        
+
+        # Create formatter for database handler
+        db_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
         # Add database handler
         try:
             db_handler = DatabaseLogHandler(connection)
@@ -133,14 +131,30 @@ class ApplicationLogger:
             db_handler.setFormatter(db_formatter)
             root_logger.addHandler(db_handler)
         except Exception as e:
+            # If DB logging fails, keep going but do not add a noisy console handler by default
             logging.warning(f"Failed to initialize database logging: {e}")
-        
-        # Add console handler
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.INFO)
-        console_handler.setFormatter(console_formatter)
-        root_logger.addHandler(console_handler)
-        
+
+        # Optionally add a console handler (opt-in). When running in production or
+        # long-lived processes, disabling console logging reduces console noise
+        # and can prevent excessive memory usage associated with retained stream buffers.
+        if console:
+            console_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(logging.INFO)
+            console_handler.setFormatter(console_formatter)
+            root_logger.addHandler(console_handler)
+
+        # Reduce verbosity for commonly noisy loggers to avoid excess logging
+        noisy_loggers = [
+            'uvicorn', 'uvicorn.error', 'uvicorn.access',
+            'httpx', 'menu_cache', 'fuzzy_matcher', 'token_manager', 'db_logger'
+        ]
+        for lname in noisy_loggers:
+            try:
+                logging.getLogger(lname).setLevel(logging.WARNING)
+            except Exception:
+                pass
+
         ApplicationLogger._handlers_configured = True
     
     @staticmethod
