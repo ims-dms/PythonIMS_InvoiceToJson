@@ -1,6 +1,7 @@
 import json
 import pyodbc
 import logging
+from encryption_util import decrypt_if_encrypted
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ def get_connection(connection_params: dict = None):
     database = normalized_config.get("database")
     user = normalized_config.get("user")
     password = normalized_config.get("password")
+    password = decrypt_if_encrypted(password)
 
     # Build connection string for SQL Server using pyodbc
     conn_str = (
@@ -53,7 +55,8 @@ def get_connection(connection_params: dict = None):
         connection = pyodbc.connect(conn_str)
         return connection
     except Exception as e:
-        logger.error(f"Error connecting to database: {e}")
+        # Use print instead of logger to avoid infinite recursion with db_logger
+        print(f"ERROR: Database connection failed - {e}", flush=True)
         raise
 
 def create_token_tables(connection=None):

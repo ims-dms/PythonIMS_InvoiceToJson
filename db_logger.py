@@ -22,6 +22,7 @@ class DatabaseLogHandler(logging.Handler):
         """
         super().__init__()
         self.connection = connection
+        self._in_emit = False  # Recursion guard
         self.ensure_table_exists()
     
     def ensure_table_exists(self):
@@ -57,7 +58,16 @@ class DatabaseLogHandler(logging.Handler):
         Args:
             record: LogRecord to emit
         """
+        # Prevent recursion - if we're already in emit, skip
+        if self._in_emit:
+            return
+        
+        # Skip logging for db_connection module to prevent infinite recursion
+        if record.module == 'db_connection':
+            return
+        
         try:
+            self._in_emit = True
             conn = self.connection or get_connection()
             cursor = conn.cursor()
             
@@ -84,8 +94,10 @@ class DatabaseLogHandler(logging.Handler):
             cursor.close()
         
         except Exception as e:
-            # Fallback to console if database logging fails
-            self.handleError(record)
+            # Silently fail to prevent recursion - don't call handleError
+            pass
+        finally:
+            self._in_emit = False
 
 
 class ApplicationLogger:
