@@ -24,7 +24,7 @@ cursor = conn.cursor()
 
 try:
     cursor.execute("""
-        INSERT INTO TokenMaster (CompanyID, CompanyName, ApiKey, Provider, TotalTokenLimit, Status)
+        INSERT INTO [docUpload].TokenMaster (CompanyID, CompanyName, ApiKey, Provider, TotalTokenLimit, Status)
         VALUES (?, ?, ?, ?, ?, ?)
     """, (company_id, company_name, api_key, 'Gemini', 100000, 'Active'))
     conn.commit()
@@ -41,7 +41,7 @@ print("Current companies in database:")
 print("=" * 70)
 conn = get_connection()
 cursor = conn.cursor()
-cursor.execute("SELECT TokenID, CompanyID, CompanyName, Status FROM TokenMaster")
+cursor.execute("SELECT TokenID, CompanyID, CompanyName, Status FROM [docUpload].TokenMaster")
 for row in cursor.fetchall():
     print(f"  TokenID={row[0]}, CompanyID='{row[1]}', Name='{row[2]}', Status={row[3]}")
 conn.close()

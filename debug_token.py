@@ -14,7 +14,7 @@ conn = get_connection()
 cursor = conn.cursor()
 
 # Check what companies have tokens
-cursor.execute("SELECT TokenID, CompanyID, Status, ApiKey FROM TokenMaster")
+cursor.execute("SELECT TokenID, CompanyID, Status, ApiKey FROM [docUpload].TokenMaster")
 tokens = cursor.fetchall()
 print(f"\nTokens in database: {len(tokens)}")
 for row in tokens:

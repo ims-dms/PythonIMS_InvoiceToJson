@@ -7,7 +7,7 @@
 -- 1. TokenMaster Table - Stores API tokens for each company
 -- ============================================================================
 IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='TokenMaster' AND xtype='U')
-CREATE TABLE TokenMaster (
+CREATE TABLE [docUpload].TokenMaster (
     TokenID INT IDENTITY(1,1) PRIMARY KEY,
     CompanyID VARCHAR(50) NOT NULL,
     CompanyName VARCHAR(200),
@@ -20,16 +20,16 @@ CREATE TABLE TokenMaster (
 );
 
 -- Add index for faster lookups
-CREATE INDEX idx_tokenmaster_company_status ON TokenMaster(CompanyID, Status);
-CREATE INDEX idx_tokenmaster_created ON TokenMaster(CreatedAt DESC);
+CREATE INDEX idx_tokenmaster_company_status ON [docUpload].TokenMaster(CompanyID, Status);
+CREATE INDEX idx_tokenmaster_created ON [docUpload].TokenMaster(CreatedAt DESC);
 
 -- ============================================================================
 -- 2. TokenUsageLogs Table - Records every token usage
 -- ============================================================================
 IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='TokenUsageLogs' AND xtype='U')
-CREATE TABLE TokenUsageLogs (
+CREATE TABLE [docUpload].TokenUsageLogs (
     UsageID INT IDENTITY(1,1) PRIMARY KEY,
-    TokenID INT NOT NULL FOREIGN KEY REFERENCES TokenMaster(TokenID),
+    TokenID INT NOT NULL FOREIGN KEY REFERENCES [docUpload].TokenMaster(TokenID),
     Branch VARCHAR(50) DEFAULT 'Default',      -- Which branch/division used the token
     RequestedBy VARCHAR(100) DEFAULT 'System', -- Username who made the request
     InputTokens INT DEFAULT 0,
@@ -43,17 +43,17 @@ CREATE TABLE TokenUsageLogs (
 );
 
 -- Add indexes for performance
-CREATE INDEX idx_usage_tokenid ON TokenUsageLogs(TokenID);
-CREATE INDEX idx_usage_loggedat ON TokenUsageLogs(LoggedAt DESC);
-CREATE INDEX idx_usage_branch ON TokenUsageLogs(Branch);
+CREATE INDEX idx_usage_tokenid ON [docUpload].TokenUsageLogs(TokenID);
+CREATE INDEX idx_usage_loggedat ON [docUpload].TokenUsageLogs(LoggedAt DESC);
+CREATE INDEX idx_usage_branch ON [docUpload].TokenUsageLogs(Branch);
 
 -- ============================================================================
 -- 3. TokenUsageSummary Table - Aggregated usage data per token
 -- ============================================================================
 IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='TokenUsageSummary' AND xtype='U')
-CREATE TABLE TokenUsageSummary (
+CREATE TABLE [docUpload].TokenUsageSummary (
     SummaryID INT IDENTITY(1,1) PRIMARY KEY,
-    TokenID INT NOT NULL UNIQUE FOREIGN KEY REFERENCES TokenMaster(TokenID),
+    TokenID INT NOT NULL UNIQUE FOREIGN KEY REFERENCES [docUpload].TokenMaster(TokenID),
     TotalUsedTokens INT DEFAULT 0,            -- Total tokens consumed
     TotalRemainingTokens INT DEFAULT 100000,  -- Tokens left
     Threshold INT DEFAULT 3000,               -- Below this = warning
@@ -61,7 +61,7 @@ CREATE TABLE TokenUsageSummary (
 );
 
 -- Add index
-CREATE INDEX idx_summary_tokenid ON TokenUsageSummary(TokenID);
+CREATE INDEX idx_summary_tokenid ON [docUpload].TokenUsageSummary(TokenID);
 
 -- ============================================================================
 -- 4. ApplicationLogs Table - All application logs saved to database
@@ -110,7 +110,7 @@ CREATE INDEX idx_retry_timestamp ON RetryAttempts(Timestamp DESC);
 -- Uncomment and edit below to insert test data
 /*
 -- Sample token for RUBI TRADERS
-INSERT INTO TokenMaster (CompanyID, CompanyName, ApiKey, Provider, TotalTokenLimit, Status)
+INSERT INTO [docUpload].TokenMaster (CompanyID, CompanyName, ApiKey, Provider, TotalTokenLimit, Status)
 VALUES 
 (
     'NT047',
@@ -134,10 +134,10 @@ VALUES
 );
 
 -- Initialize summary for tokens
-INSERT INTO TokenUsageSummary (TokenID, TotalUsedTokens, TotalRemainingTokens, Threshold)
+INSERT INTO [docUpload].TokenUsageSummary (TokenID, TotalUsedTokens, TotalRemainingTokens, Threshold)
 SELECT TokenID, 0, TotalTokenLimit, 3000
-FROM TokenMaster
-WHERE TokenID NOT IN (SELECT TokenID FROM TokenUsageSummary);
+FROM [docUpload].TokenMaster
+WHERE TokenID NOT IN (SELECT TokenID FROM [docUpload].TokenUsageSummary);
 */
 
 -- ============================================================================
@@ -162,8 +162,8 @@ SELECT
     END as HealthStatus,
     t.CreatedAt,
     s.LastUpdated
-FROM TokenMaster t
-LEFT JOIN TokenUsageSummary s ON t.TokenID = s.TokenID
+FROM [docUpload].TokenMaster t
+LEFT JOIN [docUpload].TokenUsageSummary s ON t.TokenID = s.TokenID
 ORDER BY t.CompanyID, t.CreatedAt DESC;
 
 -- View: Usage Summary by Company
@@ -178,8 +178,8 @@ SELECT
     AVG(u.TotalTokensUsed) as AvgTokensPerRequest,
     MAX(u.LoggedAt) as LastUsed,
     DATEDIFF(DAY, MIN(u.LoggedAt), MAX(u.LoggedAt)) as DaysActive
-FROM TokenMaster t
-LEFT JOIN TokenUsageLogs u ON t.TokenID = u.TokenID
+FROM [docUpload].TokenMaster t
+LEFT JOIN [docUpload].TokenUsageLogs u ON t.TokenID = u.TokenID
 WHERE t.Status = 'Active'
 GROUP BY t.CompanyID, t.CompanyName
 ORDER BY TotalTokensUsed DESC;
@@ -229,13 +229,13 @@ DELETE FROM ApplicationLogs
 WHERE Timestamp < DATEADD(DAY, -90, GETDATE());
 
 -- Reset usage for testing
-DELETE FROM TokenUsageLogs;
-DELETE FROM TokenUsageSummary;
+DELETE FROM [docUpload].TokenUsageLogs;
+DELETE FROM [docUpload].TokenUsageSummary;
 DELETE FROM RetryAttempts;
 
 -- Update token status
-UPDATE TokenMaster SET Status = 'Expired' WHERE TokenID = 1;
-UPDATE TokenMaster SET Status = 'Active' WHERE TokenID = 1;
+UPDATE [docUpload].TokenMaster SET Status = 'Expired' WHERE TokenID = 1;
+UPDATE [docUpload].TokenMaster SET Status = 'Active' WHERE TokenID = 1;
 
 -- Check database size
 SELECT 

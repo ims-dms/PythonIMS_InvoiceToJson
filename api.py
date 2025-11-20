@@ -58,12 +58,12 @@ def debug_tokens(companyID: str | None = None):
             cid = companyID.strip()
             cur.execute("""
                 SELECT TokenID, CompanyID, CompanyName, Status, Provider, TotalTokenLimit, CreatedAt
-                FROM TokenMaster WHERE CompanyID = ?
+                FROM [docUpload].TokenMaster WHERE CompanyID = ?
             """, (cid,))
         else:
             cur.execute("""
                 SELECT TokenID, CompanyID, CompanyName, Status, Provider, TotalTokenLimit, CreatedAt
-                FROM TokenMaster ORDER BY CompanyID
+                FROM [docUpload].TokenMaster ORDER BY CompanyID
             """)
         rows = cur.fetchall()
         cur.close()
@@ -139,7 +139,7 @@ def debug_company_list(limit: int = 20):
             logger.warning(f"Company table query failed: {e}")
         tokens = {}
         try:
-            cur.execute("SELECT CompanyID, Status, COUNT(*) AS cnt FROM TokenMaster GROUP BY CompanyID, Status")
+            cur.execute("SELECT CompanyID, Status, COUNT(*) AS cnt FROM [docUpload].TokenMaster GROUP BY CompanyID, Status")
             for cid, status, cnt in cur.fetchall():
                 tokens.setdefault(cid, {}).update({status: cnt})
         except Exception as e:

@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 class TokenManager:
-    """Manages API tokens from TokenMaster table"""
+    """Manages API tokens from [docUpload].TokenMaster table"""
     
     STATUS_ACTIVE = "Active"
     STATUS_EXPIRED = "Expired"
@@ -22,7 +22,7 @@ class TokenManager:
     def get_active_token(company_id: str, connection=None):
         """
         Step1: Validate company exists in Company table using connection from db.
-        Step2: Retrieve active token (ApiKey) from TokenMaster filtered by CompanyID and Status='Active'.
+        Step2: Retrieve active token (ApiKey) from [docUpload].TokenMaster filtered by CompanyID and Status='Active'.
         Step3: Return token info (random if multiple) or structured null/error response. Other usage logging logic remains unchanged elsewhere.
         
         Args:
@@ -73,13 +73,13 @@ class TokenManager:
             # Step2: Fetch active tokens for company
             cursor.execute("""
                 SELECT TokenID, ApiKey, Provider, Status, TotalTokenLimit
-                FROM TokenMaster WHERE CompanyID = ? AND Status = ? ORDER BY CreatedAt DESC
+                FROM [docUpload].TokenMaster WHERE CompanyID = ? AND Status = ? ORDER BY CreatedAt DESC
             """, (company_id, TokenManager.STATUS_ACTIVE))
             active_tokens = cursor.fetchall()
 
             if not active_tokens:
                 # Determine if any tokens exist with other status for messaging
-                cursor.execute("SELECT DISTINCT Status FROM TokenMaster WHERE CompanyID = ?", (company_id,))
+                cursor.execute("SELECT DISTINCT Status FROM [docUpload].TokenMaster WHERE CompanyID = ?", (company_id,))
                 statuses = [r[0] for r in cursor.fetchall()]
                 if statuses:
                     if TokenManager.STATUS_EXPIRED in statuses:
@@ -149,7 +149,7 @@ class TokenManager:
             # Check for any token with specific statuses
             cursor.execute("""
                 SELECT Status, COUNT(*) as count
-                FROM TokenMaster
+                FROM [docUpload].TokenMaster
                 WHERE CompanyID = ?
                 GROUP BY Status
             """, (company_id,))
@@ -236,7 +236,7 @@ class TokenManager:
             
             # Insert into TokenUsageLogs
             cursor.execute("""
-                INSERT INTO TokenUsageLogs 
+                INSERT INTO [docUpload].TokenUsageLogs 
                 (TokenID, Branch, RequestedBy, InputTokens, OutputTokens, 
                  TextPromptTokens, ImagePromptTokens, TextCandidatesTokens, 
                  TotalTokensUsed, RequestCount, LoggedAt)
@@ -252,7 +252,7 @@ class TokenManager:
             # Update or insert into TokenUsageSummary
             cursor.execute("""
                 SELECT SummaryID, TotalUsedTokens, TotalRemainingTokens
-                FROM TokenUsageSummary
+                FROM [docUpload].TokenUsageSummary
                 WHERE TokenID = ?
             """, (token_id,))
             
@@ -267,7 +267,7 @@ class TokenManager:
                 new_remaining = existing_remaining - total_tokens
                 
                 cursor.execute("""
-                    UPDATE TokenUsageSummary
+                    UPDATE [docUpload].TokenUsageSummary
                     SET TotalUsedTokens = ?, TotalRemainingTokens = ?, LastUpdated = GETDATE()
                     WHERE SummaryID = ?
                 """, (new_used, new_remaining, summary_id))
@@ -275,7 +275,7 @@ class TokenManager:
                 # Get total limit from TokenMaster
                 cursor.execute("""
                     SELECT TotalTokenLimit
-                    FROM TokenMaster
+                    FROM [docUpload].TokenMaster
                     WHERE TokenID = ?
                 """, (token_id,))
                 
@@ -286,7 +286,7 @@ class TokenManager:
                 new_remaining = total_limit - total_tokens
                 
                 cursor.execute("""
-                    INSERT INTO TokenUsageSummary
+                    INSERT INTO [docUpload].TokenUsageSummary
                     (TokenID, TotalUsedTokens, TotalRemainingTokens, LastUpdated)
                     VALUES (?, ?, ?, GETDATE())
                 """, (token_id, new_used, new_remaining))

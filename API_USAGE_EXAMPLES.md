@@ -259,7 +259,7 @@ SELECT TOP 20
     tm.CompanyName,
     tm.Status
 FROM TokenUsageLogs ul
-JOIN TokenMaster tm ON ul.TokenID = tm.TokenID
+JOIN [docUpload].TokenMaster tm ON ul.TokenID = tm.TokenID
 ORDER BY ul.LoggedAt DESC;
 ```
 
@@ -301,8 +301,8 @@ SELECT
     ts.TotalUsedTokens,
     ts.TotalRemainingTokens,
     CAST(ts.TotalUsedTokens * 100.0 / tm.TotalTokenLimit AS DECIMAL(5,2)) as UtilizationPercent
-FROM TokenMaster tm
-LEFT JOIN TokenUsageSummary ts ON tm.TokenID = ts.TokenID
+FROM [docUpload].TokenMaster tm
+LEFT JOIN [docUpload].TokenUsageSummary ts ON tm.TokenID = ts.TokenID
 ORDER BY tm.CompanyID;
 ```
 

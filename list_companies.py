@@ -9,7 +9,7 @@ conn = get_connection()
 cursor = conn.cursor()
 
 # Get all companies with tokens
-cursor.execute("SELECT DISTINCT CompanyID FROM TokenMaster ORDER BY CompanyID")
+cursor.execute("SELECT DISTINCT CompanyID FROM [docUpload].TokenMaster ORDER BY CompanyID")
 companies = [row[0] for row in cursor.fetchall()]
 
 print("Available companies with tokens:")

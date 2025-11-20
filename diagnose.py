@@ -28,7 +28,7 @@ try:
         sys.exit(1)
     
     # 3. Count tokens
-    cursor.execute("SELECT COUNT(*) FROM TokenMaster")
+    cursor.execute("SELECT COUNT(*) FROM [docUpload].TokenMaster")
     count = cursor.fetchone()[0]
     print(f"   [OK] {count} total tokens in database")
     
@@ -36,7 +36,7 @@ try:
     print("\n2. TOKENS IN DATABASE:")
     cursor.execute("""
         SELECT TokenID, CompanyID, CompanyName, Status, Provider, TotalTokenLimit
-        FROM TokenMaster
+        FROM [docUpload].TokenMaster
         ORDER BY CompanyID
     """)
     tokens = cursor.fetchall()
@@ -48,7 +48,7 @@ try:
     
     # 5. Test TokenManager.get_active_token() for each company
     print("\n3. TOKEN RETRIEVAL TEST:")
-    cursor.execute("SELECT DISTINCT CompanyID FROM TokenMaster")
+    cursor.execute("SELECT DISTINCT CompanyID FROM [docUpload].TokenMaster")
     companies = [row[0] for row in cursor.fetchall()]
     
     for company in companies:

@@ -7,7 +7,7 @@ try:
     
     # Check all tokens
     print("\n1. Checking all tokens in TokenMaster:")
-    cursor.execute("SELECT TokenID, CompanyID, Status FROM TokenMaster")
+    cursor.execute("SELECT TokenID, CompanyID, Status FROM [docUpload].TokenMaster")
     rows = cursor.fetchall()
     print(f"   Total rows: {len(rows)}")
     for row in rows:
@@ -15,7 +15,7 @@ try:
     
     # Check specific company
     print("\n2. Checking tokens for NT047:")
-    cursor.execute("SELECT TokenID, CompanyID, Status FROM TokenMaster WHERE CompanyID = ?", ('NT047',))
+    cursor.execute("SELECT TokenID, CompanyID, Status FROM [docUpload].TokenMaster WHERE CompanyID = ?", ('NT047',))
     rows = cursor.fetchall()
     print(f"   Rows found: {len(rows)}")
     for row in rows:
@@ -23,7 +23,7 @@ try:
     
     # Check active tokens for NT047
     print("\n3. Checking ACTIVE tokens for NT047:")
-    cursor.execute("SELECT TokenID, CompanyID, Status FROM TokenMaster WHERE CompanyID = ? AND Status = ?", ('NT047', 'Active'))
+    cursor.execute("SELECT TokenID, CompanyID, Status FROM [docUpload].TokenMaster WHERE CompanyID = ? AND Status = ?", ('NT047', 'Active'))
     rows = cursor.fetchall()
     print(f"   Rows found: {len(rows)}")
     for row in rows:

@@ -21,7 +21,7 @@ except Exception as e:
 
 # List tokens
 try:
-    cur.execute("SELECT TokenID, CompanyID, Status FROM TokenMaster ORDER BY CompanyID")
+    cur.execute("SELECT TokenID, CompanyID, Status FROM [docUpload].TokenMaster ORDER BY CompanyID")
     rows = cur.fetchall()
     print(f"\nTokenMaster rows: {len(rows)}")
     for r in rows:
@@ -32,7 +32,7 @@ except Exception as e:
 # Check for NT001 specifically
 for cid in ['NT001','NT047']:
     try:
-        cur.execute("SELECT COUNT(*) FROM TokenMaster WHERE CompanyID = ?", (cid,))
+        cur.execute("SELECT COUNT(*) FROM [docUpload].TokenMaster WHERE CompanyID = ?", (cid,))
         count_tok = cur.fetchone()[0]
     except:
         count_tok = 'err'

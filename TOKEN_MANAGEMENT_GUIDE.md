@@ -12,14 +12,14 @@ This document outlines the comprehensive token management system that has been i
 
 ---
 
-## Task 1: Token Retrieval from TokenMaster
+## Task 1: Token Retrieval from [docUpload].TokenMaster
 
 ### Implementation Details
 
 **Location:** `token_manager.py` - `TokenManager.get_active_token()`
 
 #### Features:
-- Retrieves tokens from `TokenMaster` table filtered by:
+- Retrieves tokens from `[docUpload].TokenMaster` table filtered by:
   - `CompanyID` (provided in API request)
   - `Status = 'Active'`
 - If multiple active tokens exist, **randomly selects** one
@@ -112,7 +112,7 @@ retry_log = [
 
 #### 1. TokenMaster
 ```sql
-CREATE TABLE TokenMaster (
+CREATE TABLE [docUpload].TokenMaster (
     TokenID INT IDENTITY(1,1) PRIMARY KEY,
     CompanyID VARCHAR(50),
     CompanyName VARCHAR(200),
@@ -126,9 +126,9 @@ CREATE TABLE TokenMaster (
 
 #### 2. TokenUsageLogs
 ```sql
-CREATE TABLE TokenUsageLogs (
+CREATE TABLE [docUpload].TokenUsageLogs (
     UsageID INT IDENTITY(1,1) PRIMARY KEY,
-    TokenID INT FOREIGN KEY REFERENCES TokenMaster(TokenID),
+    TokenID INT FOREIGN KEY REFERENCES [docUpload].TokenMaster(TokenID),
     Branch VARCHAR(50),            -- Which branch/division used the token
     RequestedBy VARCHAR(100),      -- Username who made the request
     InputTokens INT,
@@ -144,9 +144,9 @@ CREATE TABLE TokenUsageLogs (
 
 #### 3. TokenUsageSummary
 ```sql
-CREATE TABLE TokenUsageSummary (
+CREATE TABLE [docUpload].TokenUsageSummary (
     SummaryID INT IDENTITY(1,1) PRIMARY KEY,
-    TokenID INT FOREIGN KEY REFERENCES TokenMaster(TokenID),
+    TokenID INT FOREIGN KEY REFERENCES [docUpload].TokenMaster(TokenID),
     TotalUsedTokens INT DEFAULT 0,
     TotalRemainingTokens INT,
     Threshold INT DEFAULT 3000,        -- Warning threshold
@@ -343,7 +343,7 @@ logger.error("Processing failed", exc_info=True)  # Exception included
 - `branch` (optional) - Branch/division using the token
 
 **Removed Parameter:**
-- Direct API key (now uses TokenMaster)
+- Direct API key (now uses [docUpload].TokenMaster)
 
 **New Response Fields:**
 - Token information is logged internally
@@ -503,7 +503,7 @@ If you have existing token data, you need to:
 
 1. **Populate TokenMaster table** with your API keys:
 ```sql
-INSERT INTO TokenMaster (CompanyID, CompanyName, ApiKey, Provider, TotalTokenLimit, Status)
+INSERT INTO [docUpload].TokenMaster (CompanyID, CompanyName, ApiKey, Provider, TotalTokenLimit, Status)
 VALUES ('NT047', 'RUBI TRADERS Pvt ltd', 'YOUR_API_KEY_HERE', 'Gemini', 100000, 'Active');
 ```
 
@@ -518,6 +518,6 @@ VALUES ('NT047', 'RUBI TRADERS Pvt ltd', 'YOUR_API_KEY_HERE', 'Gemini', 100000, 
 For issues or questions:
 1. Check `ApplicationLogs` table for detailed error information
 2. Check `RetryAttempts` table for retry behavior
-3. Verify token exists and is Active in `TokenMaster`
+3. Verify token exists and is Active in `[docUpload].TokenMaster`
 4. Ensure database tables exist and are properly configured
 

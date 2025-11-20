@@ -7,13 +7,13 @@ Run these SQL commands to set up token data:
 
 ```sql
 -- Create and populate TokenMaster
-INSERT INTO TokenMaster (CompanyID, CompanyName, ApiKey, Provider, TotalTokenLimit, Status, CreatedAt)
+INSERT INTO [docUpload].TokenMaster (CompanyID, CompanyName, ApiKey, Provider, TotalTokenLimit, Status, CreatedAt)
 VALUES 
 ('NT047', 'RUBI TRADERS Pvt ltd', 'AIzaSyB7gYAy_0OzJp22NygC0i_nxeSzVDFefnM', 'Gemini', 100000, 'Active', GETDATE()),
 ('COMP002', 'Company Two', 'YOUR_API_KEY_2', 'Gemini', 100000, 'Active', GETDATE());
 
 -- Verify
-SELECT * FROM TokenMaster;
+SELECT * FROM [docUpload].TokenMaster;
 ```
 
 ### 2. Make API Request
@@ -28,10 +28,10 @@ curl -X POST http://localhost:8000/extract \
 ### 3. Check Usage Logs
 ```sql
 -- View usage logs
-SELECT * FROM TokenUsageLogs ORDER BY LoggedAt DESC;
+SELECT * FROM [docUpload].TokenUsageLogs ORDER BY LoggedAt DESC;
 
 -- View summary
-SELECT * FROM TokenUsageSummary;
+SELECT * FROM [docUpload].TokenUsageSummary;
 
 -- View application logs
 SELECT * FROM ApplicationLogs ORDER BY Timestamp DESC;
@@ -152,8 +152,8 @@ Response: "Your AI token has expired. Please renew your subscription."
 ```sql
 SELECT t.CompanyID, t.CompanyName, u.Branch, u.RequestedBy, 
        u.InputTokens, u.OutputTokens, u.TotalTokensUsed, u.LoggedAt
-FROM TokenUsageLogs u
-JOIN TokenMaster t ON u.TokenID = t.TokenID
+FROM [docUpload].TokenUsageLogs u
+JOIN [docUpload].TokenMaster t ON u.TokenID = t.TokenID
 WHERE t.CompanyID = 'NT047'
 ORDER BY u.LoggedAt DESC;
 ```
@@ -164,8 +164,8 @@ SELECT t.CompanyID, t.CompanyName, ts.TotalUsedTokens,
        ts.TotalRemainingTokens, ts.Threshold,
        CASE WHEN ts.TotalRemainingTokens < ts.Threshold THEN 'WARNING' 
             ELSE 'OK' END as Status
-FROM TokenUsageSummary ts
-JOIN TokenMaster t ON ts.TokenID = t.TokenID
+FROM [docUpload].TokenUsageSummary ts
+JOIN [docUpload].TokenMaster t ON ts.TokenID = t.TokenID
 WHERE t.Status = 'Active';
 ```
 
@@ -225,15 +225,15 @@ ApplicationLogger.configure(log_level=logging.DEBUG)
 ## Troubleshooting
 
 ### No token found for company
-1. Check: `SELECT * FROM TokenMaster WHERE CompanyID = 'NT047'`
+1. Check: `SELECT * FROM [docUpload].TokenMaster WHERE CompanyID = 'NT047'`
 2. Insert token if missing:
    ```sql
-   INSERT INTO TokenMaster (CompanyID, CompanyName, ApiKey, Provider, TotalTokenLimit, Status)
+  INSERT INTO [docUpload].TokenMaster (CompanyID, CompanyName, ApiKey, Provider, TotalTokenLimit, Status)
    VALUES ('NT047', 'Company Name', 'API_KEY', 'Gemini', 100000, 'Active');
    ```
 
 ### Tokens not being logged
-1. Check: `SELECT * FROM TokenUsageLogs ORDER BY LoggedAt DESC;`
+1. Check: `SELECT * FROM [docUpload].TokenUsageLogs ORDER BY LoggedAt DESC;`
 2. Verify token ID is being returned: Check `ApplicationLogs` for "Token X selected"
 3. Check Gemini response format: Must contain usage information
 
@@ -267,8 +267,8 @@ WHERE Timestamp < DATEADD(MONTH, -3, GETDATE());
 ### Reset usage tracking
 ```sql
 -- Clear usage logs for testing
-DELETE FROM TokenUsageLogs;
-DELETE FROM TokenUsageSummary;
+DELETE FROM [docUpload].TokenUsageLogs;
+DELETE FROM [docUpload].TokenUsageSummary;
 DELETE FROM RetryAttempts;
 ```
 
@@ -282,9 +282,9 @@ FROM sysfiles;
 
 ## Performance Tips
 
-1. **Optimize token lookup**: Add index to TokenMaster
+1. **Optimize token lookup**: Add index to [docUpload].TokenMaster
    ```sql
-   CREATE INDEX idx_company_status ON TokenMaster(CompanyID, Status);
+  CREATE INDEX idx_company_status ON [docUpload].TokenMaster(CompanyID, Status);
    ```
 
 2. **Archive old logs**: Keep ApplicationLogs table lean
@@ -294,7 +294,7 @@ FROM sysfiles;
 
 3. **Monitor token usage**: Set up alerts on token thresholds
    ```sql
-   SELECT * FROM TokenUsageSummary 
+  SELECT * FROM [docUpload].TokenUsageSummary 
    WHERE TotalRemainingTokens < Threshold;
    ```
 

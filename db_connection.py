@@ -67,7 +67,7 @@ def create_token_tables(connection=None):
         # Create TokenMaster table
         cursor.execute("""
             IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='TokenMaster' AND xtype='U')
-            CREATE TABLE TokenMaster (
+            CREATE TABLE [docUpload].TokenMaster (
                 TokenID INT IDENTITY(1,1) PRIMARY KEY,
                 CompanyID VARCHAR(50),
                 CompanyName VARCHAR(200),
@@ -83,9 +83,9 @@ def create_token_tables(connection=None):
         # Create TokenUsageLogs table
         cursor.execute("""
             IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='TokenUsageLogs' AND xtype='U')
-            CREATE TABLE TokenUsageLogs (
+            CREATE TABLE [docUpload].TokenUsageLogs (
                 UsageID INT IDENTITY(1,1) PRIMARY KEY,
-                TokenID INT FOREIGN KEY REFERENCES TokenMaster(TokenID),
+                TokenID INT FOREIGN KEY REFERENCES [docUpload].TokenMaster(TokenID),
                 Branch VARCHAR(50),
                 RequestedBy VARCHAR(100),
                 InputTokens INT,
@@ -103,9 +103,9 @@ def create_token_tables(connection=None):
         # Create TokenUsageSummary table
         cursor.execute("""
             IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='TokenUsageSummary' AND xtype='U')
-            CREATE TABLE TokenUsageSummary (
+            CREATE TABLE [docUpload].TokenUsageSummary (
                 SummaryID INT IDENTITY(1,1) PRIMARY KEY,
-                TokenID INT FOREIGN KEY REFERENCES TokenMaster(TokenID),
+                TokenID INT FOREIGN KEY REFERENCES [docUpload].TokenMaster(TokenID),
                 TotalUsedTokens INT DEFAULT 0,
                 TotalRemainingTokens INT,
                 Threshold INT DEFAULT 3000,
@@ -127,3 +127,4 @@ if __name__ == "__main__":
     row = cursor.fetchone()
     print("SQL Server version:", row[0])
     conn.close()
+
