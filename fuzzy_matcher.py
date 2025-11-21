@@ -66,9 +66,41 @@ from typing import List, Dict, Tuple, Optional
 from rapidfuzz import fuzz, process
 from rapidfuzz.distance import Levenshtein
 import time
+import re
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def preprocess_text(text: str) -> str:
+    """
+    Normalize text for better fuzzy matching by removing special characters
+    and standardizing format.
+    
+    Args:
+        text: Input text to normalize
+    
+    Returns:
+        Normalized text (uppercase, no special chars, single spaces)
+    
+    Example:
+        "Kingfisher Strong -Bottle 330ml" -> "KINGFISHER STRONG BOTTLE 330ML"
+        "NESCAFE (CLASSIC) 100g" -> "NESCAFE CLASSIC 100G"
+    """
+    if not text:
+        return ""
+    
+    # Convert to uppercase
+    text = text.upper()
+    
+    # Remove special characters (keep only alphanumeric and spaces)
+    # This handles: hyphens, slashes, parentheses, asterisks, etc.
+    text = re.sub(r'[^A-Z0-9\s]', ' ', text)
+    
+    # Remove extra spaces
+    text = ' '.join(text.split())
+    
+    return text
 
 
 class FuzzyMatcher:
@@ -103,19 +135,33 @@ class FuzzyMatcher:
         """
         start_time = time.time()
         
+        # Preprocess all items for better matching
+        # Store both original and preprocessed versions
+        processed_items = []
+        for item in menu_items:
+            if item[0]:  # Filter out None/empty
+                original_desca = item[0]
+                preprocessed_desca = preprocess_text(original_desca)
+                processed_items.append({
+                    'original_desca': original_desca,
+                    'preprocessed_desca': preprocessed_desca,
+                    'mcode': item[1],
+                    'menucode': item[2]
+                })
+        
         # Create lookup structures for ultra-fast matching
         self._cache = {
-            'desca_list': [item[0] for item in menu_items if item[0]],  # Filter out None/empty
-            'mcode_list': [item[1] for item in menu_items if item[0]],
-            'menucode_list': [item[2] for item in menu_items if item[0]],
-            'desca_to_mcode': {item[0]: item[1] for item in menu_items if item[0]},
-            'item_count': len([item for item in menu_items if item[0]])
+            'preprocessed_list': [item['preprocessed_desca'] for item in processed_items],
+            'original_list': [item['original_desca'] for item in processed_items],
+            'mcode_list': [item['mcode'] for item in processed_items],
+            'menucode_list': [item['menucode'] for item in processed_items],
+            'item_count': len(processed_items)
         }
         
         self._cache_timestamp = time.time()
         
         elapsed = time.time() - start_time
-        logger.info(f"Loaded {self._cache['item_count']} menu items in {elapsed:.2f}s")
+        logger.info(f"Loaded and preprocessed {self._cache['item_count']} menu items in {elapsed:.2f}s")
     
     def is_cache_valid(self) -> bool:
         """Check if cache is still valid based on TTL."""
@@ -187,14 +233,18 @@ class FuzzyMatcher:
         
         scorer = SCORERS.get(scorer_name, fuzz.token_set_ratio)
         
+        # Preprocess the query for better matching
+        preprocessed_query = preprocess_text(query)
+        
         start_time = time.time()
         
         # Use rapidfuzz.process.extract for efficient bulk matching
+        # Match against preprocessed database items
         # This is CRITICAL for performance with 700k items
         # Returns: List of tuples (match_string, score, index)
         matches = process.extract(
-            query,
-            self._cache['desca_list'],
+            preprocessed_query,
+            self._cache['preprocessed_list'],
             scorer=scorer,
             limit=limit,
             score_cutoff=score_cutoff
@@ -203,12 +253,14 @@ class FuzzyMatcher:
         elapsed = time.time() - start_time
         
         # Format results with all relevant information
+        # Return original (non-preprocessed) desca for display
         results = []
-        for rank, (matched_desca, score, idx) in enumerate(matches, start=1):
+        for rank, (matched_preprocessed, score, idx) in enumerate(matches, start=1):
+            original_desca = self._cache['original_list'][idx]
             mcode = self._cache['mcode_list'][idx]
             menucode = self._cache['menucode_list'][idx]
             results.append({
-                'desca': matched_desca,
+                'desca': original_desca,
                 'mcode': mcode,
                 'menucode': menucode,
                 'score': round(score, 2),
@@ -360,10 +412,13 @@ def match_ocr_products(
         
         # First, check OCRMappedData table for existing mapping
         mapped_match = None
+        logger.debug(f"Processing product: sku_query='{sku_query}', connection={connection is not None}, supplier_name='{supplier_name}'")
+        
         if connection and supplier_name:
             try:
                 # Ensure schema and table exist
                 cursor = connection.cursor()
+                logger.debug(f"Attempting database lookup for sku_query='{sku_query}' with supplier_name='{supplier_name}'")
                 
                 # Check if schema exists, create if not
                 cursor.execute("""
@@ -407,13 +462,27 @@ def match_ocr_products(
                 """)
                 connection.commit()
                 
-                # Now query the table
+                # Now query the table - try with supplier name first, then without
+                # First try: exact match with supplier name
                 cursor.execute("""
-                    SELECT Dbmcode, DbDesca, DbMenuCode
+                    SELECT DbMcode, DbDesca, DbMenuCode
                     FROM [docUpload].[OCRMappedData]
-                    WHERE InvoiceProductName = ? AND InvoiceSupplierName = ?
+                    WHERE InvoiceProductName = ? AND (InvoiceSupplierName = ? OR InvoiceSupplierName = 'supplier')
                 """, (sku_query, supplier_name))
                 row = cursor.fetchone()
+                
+                # If no match with supplier, try without supplier constraint
+                if not row:
+                    logger.debug(f"No match with supplier '{supplier_name}', trying without supplier constraint")
+                    cursor.execute("""
+                        SELECT TOP 1 DbMcode, DbDesca, DbMenuCode
+                        FROM [docUpload].[OCRMappedData]
+                        WHERE InvoiceProductName = ?
+                    """, (sku_query,))
+                    row = cursor.fetchone()
+                
+                logger.debug(f"Database query result for sku_query='{sku_query}' and supplier_name='{supplier_name}': {row}")
+                
                 if row:
                     mapped_match = {
                         'desca': row[1] if row[1] else row[0],
@@ -422,17 +491,23 @@ def match_ocr_products(
                         'score': 100.0,  # Exact match
                         'rank': 1
                     }
+                    logger.info(f"Found existing mapping in OCRMappedData: {mapped_match}")
+                else:
+                    logger.debug(f"No mapping found in OCRMappedData for sku_query='{sku_query}' with supplier_name='{supplier_name}'")
                 cursor.close()
             except Exception as e:
                 logger.warning(f"Error querying OCRMappedData (falling back to fuzzy matching): {e}")
                 # Continue to fuzzy matching on any error
                 mapped_match = None
+        else:
+            logger.debug(f"Skipping OCRMappedData lookup: connection={'not provided' if not connection else 'provided'}, supplier_name={'empty' if not supplier_name else 'provided'}")
         
         if mapped_match:
             # Found in mapping table
             product['best_match'] = mapped_match
+            product['fuzzy_matches'] = [mapped_match]  # Include the mapped match in fuzzy_matches
+            product['match_confidence'] = 'high'  # Existing mappings are considered high confidence
             product['mapped_nature'] = 'Existing'
-            # No fuzzy_matches or match_confidence for existing mappings
         else:
             # Not found in mapping, do fuzzy matching
             match_result = matcher.match_single(

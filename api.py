@@ -632,7 +632,10 @@ async def process_invoice(
                 
                 # Apply fuzzy matching to products
                 logger.info(f"Starting fuzzy matching for {len(products)} products...")
-                supplier_name = data.get('company_name', '')
+                supplier_name = (data.get('company_name', '') or '').strip()
+                logger.info(f"Supplier name extracted from invoice: '{supplier_name}'")
+                logger.info(f"Database connection available: {db_conn is not None}")
+                
                 products = match_ocr_products(
                     ocr_products=products,
                     menu_items=menu_items,
