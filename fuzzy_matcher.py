@@ -126,12 +126,12 @@ class FuzzyMatcher:
         self._cache_ttl = cache_ttl
         logger.info(f"FuzzyMatcher initialized with {cache_ttl}s cache TTL")
     
-    def load_menu_items(self, menu_items: List[Tuple[str, str, str]]) -> None:
+    def load_menu_items(self, menu_items: List[Tuple[str, str, str, str, any, str]]) -> None:
         """
         Load and cache menu items from database.
         
         Args:
-            menu_items: List of tuples (desca, mcode, menucode) from database query
+            menu_items: List of tuples (desca, mcode, menucode, baseunit, confactor, altunit) from database query
         """
         start_time = time.time()
         
@@ -146,7 +146,10 @@ class FuzzyMatcher:
                     'original_desca': original_desca,
                     'preprocessed_desca': preprocessed_desca,
                     'mcode': item[1],
-                    'menucode': item[2]
+                    'menucode': item[2],
+                    'baseunit': item[3] if len(item) > 3 else None,
+                    'confactor': item[4] if len(item) > 4 else None,
+                    'altunit': item[5] if len(item) > 5 else None
                 })
         
         # Create lookup structures for ultra-fast matching
@@ -155,6 +158,9 @@ class FuzzyMatcher:
             'original_list': [item['original_desca'] for item in processed_items],
             'mcode_list': [item['mcode'] for item in processed_items],
             'menucode_list': [item['menucode'] for item in processed_items],
+            'baseunit_list': [item['baseunit'] for item in processed_items],
+            'confactor_list': [item['confactor'] for item in processed_items],
+            'altunit_list': [item['altunit'] for item in processed_items],
             'item_count': len(processed_items)
         }
         
@@ -187,7 +193,7 @@ class FuzzyMatcher:
         
         Returns:
             Dictionary with match results:
-            - fuzzy_matches: List of match dictionaries with keys desca, mcode, menucode, score, rank
+            - fuzzy_matches: List of match dictionaries with keys desca, mcode, menucode, baseunit, confactor, altunit, score, rank
             - best_match: The top match dictionary or None
         
         SCORER SELECTION GUIDE:
@@ -259,10 +265,23 @@ class FuzzyMatcher:
             original_desca = self._cache['original_list'][idx]
             mcode = self._cache['mcode_list'][idx]
             menucode = self._cache['menucode_list'][idx]
+            baseunit = self._cache['baseunit_list'][idx]
+            confactor = self._cache['confactor_list'][idx]
+            altunit = self._cache['altunit_list'][idx]
+            
+            # Convert None to empty string and handle Decimal type for confactor
+            from decimal import Decimal
+            confactor_value = ''
+            if confactor is not None:
+                confactor_value = float(confactor) if isinstance(confactor, (int, float, Decimal)) else confactor
+            
             results.append({
                 'desca': original_desca,
                 'mcode': mcode,
                 'menucode': menucode,
+                'baseunit': baseunit if baseunit is not None else '',
+                'confactor': confactor_value,
+                'altunit': altunit if altunit is not None else '',
                 'score': round(score, 2),
                 'rank': rank
             })
@@ -350,7 +369,7 @@ class FuzzyMatcher:
 
 def match_ocr_products(
     ocr_products: List[Dict[str, any]], 
-    menu_items: List[Tuple[str, str, str]],
+    menu_items: List[Tuple[str, str, str, str, any, str]],
     top_k: int = 3,
     score_cutoff: float = 60.0,
     connection = None,
@@ -365,7 +384,7 @@ def match_ocr_products(
     Args:
         ocr_products: List of product dictionaries from OCR extraction
                      Each must have 'sku' key with description
-        menu_items: List of (desca, mcode) tuples from database
+        menu_items: List of (desca, mcode, menucode, baseunit, confactor, altunit) tuples from database
         top_k: Number of suggestions per product (default: 3)
         score_cutoff: Minimum match score 0-100 (default: 60.0)
         connection: Database connection object (optional, for OCRMappedData lookup)
@@ -380,10 +399,10 @@ def match_ocr_products(
                 "quantity": 5,
                 ... (all original fields preserved) ...
                 "fuzzy_matches": [  # Only if no exact mapping found
-                    {"desca": "LACTOGEN PRO1 BIB 24x400g", "mcode": "ITM001", "score": 95.5, "rank": 1},
+                    {"desca": "LACTOGEN PRO1 BIB 24x400g", "mcode": "ITM001", "menucode": "MENU001", "baseunit": "Pcs", "confactor": 12, "altunit": "Case", "score": 95.5, "rank": 1},
                     ...
                 ],
-                "best_match": {"desca": "...", "mcode": "...", "score": 95.5, "rank": 1},
+                "best_match": {"desca": "...", "mcode": "...", "menucode": "...", "baseunit": "...", "confactor": ..., "altunit": "...", "score": 95.5, "rank": 1},
                 "match_confidence": "high",  # high (>85), medium (70-85), low (60-70), none (<60)
                 "mapped_nature": "Existing" | "New Mapped" | "Not Matched"
             },
@@ -465,9 +484,11 @@ def match_ocr_products(
                 # Now query the table - try with supplier name first, then without
                 # First try: exact match with supplier name
                 cursor.execute("""
-                    SELECT DbMcode, DbDesca, DbMenuCode
-                    FROM [docUpload].[OCRMappedData]
-                    WHERE InvoiceProductName = ? AND (InvoiceSupplierName = ? OR InvoiceSupplierName = 'supplier')
+                    SELECT o.DbMcode, o.DbDesca, o.DbMenuCode, mu.BASEUOM as baseunit, mu.CONFACTOR, mu.altunit
+                    FROM [docUpload].[OCRMappedData] o
+                    LEFT JOIN menuitem m ON o.DbMcode = m.mcode
+                    LEFT JOIN MULTIALTUNIT mu ON mu.mcode = o.DbMcode
+                    WHERE o.InvoiceProductName = ? AND (o.InvoiceSupplierName = ? OR o.InvoiceSupplierName = 'supplier')
                 """, (sku_query, supplier_name))
                 row = cursor.fetchone()
                 
@@ -475,19 +496,30 @@ def match_ocr_products(
                 if not row:
                     logger.debug(f"No match with supplier '{supplier_name}', trying without supplier constraint")
                     cursor.execute("""
-                        SELECT TOP 1 DbMcode, DbDesca, DbMenuCode
-                        FROM [docUpload].[OCRMappedData]
-                        WHERE InvoiceProductName = ?
+                        SELECT TOP 1 o.DbMcode, o.DbDesca, o.DbMenuCode, mu.BASEUOM as baseunit, mu.CONFACTOR, mu.altunit
+                        FROM [docUpload].[OCRMappedData] o
+                        LEFT JOIN menuitem m ON o.DbMcode = m.mcode
+                        LEFT JOIN MULTIALTUNIT mu ON mu.mcode = o.DbMcode
+                        WHERE o.InvoiceProductName = ?
                     """, (sku_query,))
                     row = cursor.fetchone()
                 
                 logger.debug(f"Database query result for sku_query='{sku_query}' and supplier_name='{supplier_name}': {row}")
                 
                 if row:
+                    # Handle Decimal type for confactor
+                    from decimal import Decimal
+                    confactor_value = ''
+                    if len(row) > 4 and row[4] is not None:
+                        confactor_value = float(row[4]) if isinstance(row[4], (int, float, Decimal)) else row[4]
+                    
                     mapped_match = {
                         'desca': row[1] if row[1] else row[0],
                         'mcode': row[0],
                         'menucode': row[2] if row[2] else row[0],  # Use DbMenuCode if available, else Dbmcode
+                        'baseunit': row[3] if (len(row) > 3 and row[3] is not None) else '',
+                        'confactor': confactor_value,
+                        'altunit': row[5] if (len(row) > 5 and row[5] is not None) else '',
                         'score': 100.0,  # Exact match
                         'rank': 1
                     }

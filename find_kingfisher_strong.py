@@ -74,7 +74,7 @@ def find_kingfisher_strong():
     print(f"   Total menuitem records: {count}")
     
     print("\n6. Count menuitem records WHERE type = 'A':")
-    cursor.execute("SELECT COUNT(*) FROM menuitem WHERE type = 'A'")
+    cursor.execute("SELECT COUNT(*) FROM menuitem WHERE type = 'A' and isactive = 1")
     count = cursor.fetchone()[0]
     print(f"   Total type='A' records: {count}")
     

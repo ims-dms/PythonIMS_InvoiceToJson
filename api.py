@@ -604,7 +604,12 @@ async def process_invoice(
                         conn = get_connection()
                     
                     cursor = conn.cursor()
-                    cursor.execute("SELECT desca, mcode, menucode FROM menuitem WHERE type = 'A'")
+                    cursor.execute("""
+                        SELECT m.desca, m.mcode, m.menucode, a.BASEUOM as baseunit, a.CONFACTOR, a.altunit 
+                        FROM menuitem m 
+                        LEFT JOIN MULTIALTUNIT a ON m.mcode = a.mcode 
+                        WHERE m.type = 'A' and m.isactive = 1
+                    """)
                     items = cursor.fetchall()
                     cursor.close()
                     conn.close()

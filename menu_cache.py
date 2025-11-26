@@ -64,12 +64,12 @@ class MenuItemCache:
         self._ttl = ttl
         logger.info(f"Cache TTL updated to {ttl}s")
     
-    def load(self, menu_items: List[Tuple[str, str, str]], force: bool = False) -> None:
+    def load(self, menu_items: List[Tuple[str, str, str, str, any, str]], force: bool = False) -> None:
         """
         Load menu items into cache.
         
         Args:
-            menu_items: List of (desca, mcode, menucode) tuples from database
+            menu_items: List of (desca, mcode, menucode, baseunit, confactor, altunit) tuples from database
             force: Force reload even if cache is valid
         """
         with self._lock:
@@ -83,11 +83,20 @@ class MenuItemCache:
             valid_items = []
             for item in menu_items:
                 if item and len(item) >= 2 and item[0] and item[0].strip():
-                    # Handle both 2-tuple (desca, mcode) and 3-tuple (desca, mcode, menucode)
+                    # Handle various tuple lengths: 2-tuple, 3-tuple, or 6-tuple
                     if len(item) == 2:
-                        valid_items.append((item[0], item[1], item[1]))  # Use mcode as menucode
+                        valid_items.append((item[0], item[1], item[1], None, None, None))  # Use mcode as menucode
+                    elif len(item) == 3:
+                        valid_items.append((item[0], item[1], item[2] if item[2] else item[1], None, None, None))
                     else:
-                        valid_items.append((item[0], item[1], item[2] if item[2] else item[1]))
+                        valid_items.append((
+                            item[0], 
+                            item[1], 
+                            item[2] if item[2] else item[1],
+                            item[3] if len(item) > 3 else None,
+                            item[4] if len(item) > 4 else None,
+                            item[5] if len(item) > 5 else None
+                        ))
             
             self._cache_data = {
                 'items': valid_items,
@@ -103,12 +112,12 @@ class MenuItemCache:
                 f"(load #{self._load_count})"
             )
     
-    def get(self) -> Optional[List[Tuple[str, str, str]]]:
+    def get(self) -> Optional[List[Tuple[str, str, str, str, any, str]]]:
         """
         Get cached menu items.
         
         Returns:
-            List of (desca, mcode, menucode) tuples, or None if cache is invalid
+            List of (desca, mcode, menucode, baseunit, confactor, altunit) tuples, or None if cache is invalid
         """
         if not self.is_valid():
             logger.warning("Cache is invalid or expired")
@@ -178,18 +187,22 @@ def get_cached_menu_items(
         force_refresh: Force database query even if cache is valid
     
     Returns:
-        List of (desca, mcode, menucode) tuples
+        List of (desca, mcode, menucode, baseunit, confactor, altunit) tuples
     
     Example:
         def fetch_from_db():
             conn = get_connection()
             cursor = conn.cursor()
-            cursor.execute("SELECT desca, mcode, menucode FROM menuitem")
+            cursor.execute('''
+            SELECT m.desca, m.mcode, m.menucode, a.BASEUOM, a.CONFACTOR, a.altunit
+            FROM menuitem m
+            LEFT JOIN MULTIALTUNIT a ON m.mcode = a.mcode
+            ''')
             items = cursor.fetchall()
             cursor.close()
             conn.close()
             return items
-        
+
         menu_items = get_cached_menu_items(fetch_from_db)
     """
     
