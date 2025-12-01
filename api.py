@@ -226,6 +226,11 @@ Extract data from ALL PAGES of the TAX INVOICE document following these strict r
        "due_date": "string",
        "invoice_miti": "string",
        "invoice_date": "string",
+             "sub_total": float,              // from totals box; may be called Gross Amount
+             "discount_total": float,         // from totals box; MUST include sign if shown (e.g., -63440.25)
+             "taxable_value": float,          // from totals box; sometimes called Taxable Amount/Value
+             "vat_total": float,              // total VAT (e.g., VAT 13%)
+             "total_amount": float,           // grand/net/total amount to pay
        "sku": ["string"],
        "sku_code": ["string"],
        "quantity": [int],
@@ -242,7 +247,9 @@ Extract data from ALL PAGES of the TAX INVOICE document following these strict r
        "altQty": [int],
        "unit": ["string"]
      }
-   - Return empty strings/arrays for missing data
+     - Always extract totals from the totals panel when present and prefer these over computations.
+     - Return empty strings/arrays for missing data; however, totals should be present whenever the invoice has them.
+     - Preserve negative signs shown for discount; do not convert to positive.
    - ABSOLUTELY NO ADDITIONAL TEXT OR MARKDOWN
 """
 
@@ -541,6 +548,53 @@ async def process_invoice(
                 data = normalize_arrays(data)
                 data['sku'] = data.get('sku', [])
                 data['brands'] = [sku.split()[0] if sku else "" for sku in data.get('sku', [])]
+
+                # Extract invoice-level totals if present in model output
+                def pick_number(*candidates):
+                    import re
+                    for c in candidates:
+                        val = normalized_data.get(c)
+                        if val is not None:
+                            # Some models return strings; coerce safely
+                            try:
+                                if isinstance(val, (int, float)):
+                                    return float(val)
+                                if isinstance(val, str):
+                                    # robust numeric parse: keep optional leading minus, digits and dot
+                                    m = re.search(r"-?\d[\d,]*\.?\d*", val)
+                                    if m:
+                                        return float(m.group(0).replace(',', ''))
+                                # If array provided accidentally, pick first numeric
+                                if isinstance(val, list) and val:
+                                    for item in val:
+                                        try:
+                                            m = re.search(r"-?\d[\d,]*\.?\d*", str(item))
+                                            if m:
+                                                return float(m.group(0).replace(',', ''))
+                                        except Exception:
+                                            continue
+                            except Exception:
+                                continue
+                    return None
+
+                sub_total = pick_number('subtotal', 'sub_total', 'totalbeforediscount', 'grossamount')
+                # Avoid generic 'discount' which may refer to per-line column
+                discount_total = pick_number('discounttotal', 'totaldiscount', 'discountamount', 'discount_amount')
+                taxable_value = pick_number('taxablevalue', 'taxable_value', 'taxableamount')
+                vat_total = pick_number('vat_total', 'tax_total', 'vat13', 'vatvalue')
+                grand_total = pick_number('totalamount', 'grandtotal', 'netamount', 'total_amount')
+
+                # Attach prioritized totals to the response if found (use distinct keys)
+                if sub_total is not None:
+                    data['sub_total'] = sub_total
+                if discount_total is not None:
+                    data['discount_total'] = discount_total
+                if taxable_value is not None:
+                    data['taxable_value'] = taxable_value
+                if vat_total is not None:
+                    data['vat_total'] = vat_total
+                if grand_total is not None:
+                    data['total_amount'] = grand_total
                 
                 # Process products
                 products = []
@@ -553,9 +607,10 @@ async def process_invoice(
                 batch_list = normalized_data.get('batch') or []
                 sno_list = data.get('sno', [])
                 rate_list = normalized_data.get('rate') or []
-                discount_list = data.get('discount', [])
+                # Ensure we only treat per-line discounts as lists; scalar invoice discounts are handled separately
+                discount_list = data.get('discount', []) if isinstance(data.get('discount'), list) else []
                 mrp_list = normalized_data.get('mrp') or normalized_data.get('mrpvalue') or []
-                vat_list = normalized_data.get('vat') or normalized_data.get('vatvalue') or []
+                vat_list = (normalized_data.get('vat') or normalized_data.get('vatvalue') or []) if isinstance((normalized_data.get('vat') or normalized_data.get('vatvalue') or []), list) else []
                 hscode_list = normalized_data.get('hscode') or normalized_data.get('hs_code') or []
                 altqty_list = normalized_data.get('altqty') or normalized_data.get('altquantity') or []
                 unit_list = normalized_data.get('unit') or normalized_data.get('unitofmeasure') or normalized_data.get('uom') or []
@@ -587,6 +642,58 @@ async def process_invoice(
                         "unit": unit_list[i] if i < len(unit_list) else ""
                     }
                     products.append(product)
+
+                # Compute fallback totals from products if OCR didn't provide
+                try:
+                    computed_sub_total = sum(float(rate_list[i] if i < len(rate_list) else 0) * float(quantity_list[i] if i < len(quantity_list) else 0) for i in range(max_len))
+                except Exception:
+                    computed_sub_total = None
+
+                try:
+                    computed_discount_total = None
+                    if isinstance(discount_list, list) and len(discount_list) == max_len:
+                        computed_discount_total = sum(float(discount_list[i] or 0) for i in range(max_len))
+                except Exception:
+                    computed_discount_total = None
+
+                try:
+                    computed_taxable_value = None
+                    if computed_sub_total is not None:
+                        if data.get('discount_total') is not None:
+                            computed_taxable_value = computed_sub_total - float(data['discount_total'])
+                        elif computed_discount_total is not None:
+                            computed_taxable_value = computed_sub_total - computed_discount_total
+                        else:
+                            computed_taxable_value = computed_sub_total
+                except Exception:
+                    computed_taxable_value = None
+
+                # If totals are missing, fill with computed values where safe
+                if data.get('sub_total') is None and computed_sub_total is not None:
+                    data['sub_total'] = round(computed_sub_total, 2)
+                # Prefer OCR totals; if missing, compute from per-line discounts
+                if data.get('discount_total') is None and computed_discount_total is not None:
+                    data['discount_total'] = round(computed_discount_total, 2)
+                if data.get('taxable_value') is None and computed_taxable_value is not None:
+                    data['taxable_value'] = round(computed_taxable_value, 2)
+
+                # Infer VAT total from grand total and taxable value if available
+                if data.get('vat_total') is None and data.get('total_amount') is not None and data.get('taxable_value') is not None:
+                    try:
+                        data['vat_total'] = round(float(data['total_amount']) - float(data['taxable_value']), 2)
+                    except Exception:
+                        pass
+
+                # Final consistency attempt: if sub_total and total_amount plus vat_total known, derive discount
+                if data.get('discount_total') in (None, 0) and data.get('sub_total') is not None:
+                    try:
+                        if data.get('taxable_value') is not None and float(data['taxable_value']) <= float(data['sub_total']) - 0.01:
+                            data['discount_total'] = round(float(data['sub_total']) - float(data['taxable_value']), 2)
+                        elif data.get('total_amount') is not None and data.get('vat_total') is not None:
+                            # discount = sub_total + vat_total - total_amount
+                            data['discount_total'] = round(float(data['sub_total']) + float(data['vat_total']) - float(data['total_amount']), 2)
+                    except Exception:
+                        pass
                 
                 logger.debug(f"Raw SKU data from Gemini response: {data.get('sku', [])}")
                 
@@ -653,9 +760,10 @@ async def process_invoice(
                 
                 db_conn.close()
                 
-                # Clean up response data
+                # Clean up response data: remove array fields only, preserve scalar totals
                 for key in ['sku', 'quantity', 'shortage', 'breakage', 'leakage', 'batch', 'sno', 'rate', 'discount', 'mrp', 'vat', 'brands']:
-                    data.pop(key, None)
+                    if isinstance(data.get(key), list):
+                        data.pop(key, None)
                 
                 data['products'] = products
                 
