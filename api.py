@@ -28,18 +28,26 @@ load_dotenv()
 
 app = FastAPI(title="Tax Invoice Processor", version="1.0.0")
 
-# CORS configuration - Fixed for browser requests with Authorization headers
-origins = [
+origins_from_env = os.getenv("CORS_ALLOW_ORIGINS", "").strip()
+allowed_origins = [o.strip() for o in origins_from_env.split(",") if o.strip()] or [
     "http://localhost:4100",
     "http://localhost:8080",
     "http://127.0.0.1:4100",
     "http://127.0.0.1:8080",
 ]
 
+allowed_origin_regex = os.getenv(
+    "CORS_ALLOW_ORIGIN_REGEX",
+    r"^https?://((localhost|127\.0\.0\.1)(:\\d+)?|([a-z0-9-]+\.)*himshang\.com\.np)(:\\d+)?$"
+)
+
+allow_credentials = os.getenv("CORS_ALLOW_CREDENTIALS", "true").lower() in ("1", "true", "yes")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
+    allow_origins=allowed_origins,
+    allow_origin_regex=allowed_origin_regex,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
