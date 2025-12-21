@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("PythonNetWrapper")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+9cd9fb51afb8c12bac13f9d04dd89c0c413ff7d1")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+7bfc8348fdbee033d6327bb5fe51b89739fdef23")]
 [assembly: System.Reflection.AssemblyProductAttribute("PythonNetWrapper")]
 [assembly: System.Reflection.AssemblyTitleAttribute("PythonNetWrapper")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

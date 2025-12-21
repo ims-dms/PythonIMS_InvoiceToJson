@@ -720,9 +720,15 @@ async def process_invoice(
                     
                     cursor = conn.cursor()
                     cursor.execute("""
-                        SELECT m.desca, m.mcode, m.menucode, a.BASEUOM as baseunit, a.CONFACTOR, a.altunit 
-                        FROM menuitem m 
-                        LEFT JOIN MULTIALTUNIT a ON m.mcode = a.mcode 
+                        SELECT m.desca,
+                               m.mcode,
+                               m.menucode,
+                               a.BASEUOM as baseunit,
+                               a.CONFACTOR,
+                               a.altunit,
+                               m.VAT as vat
+                        FROM menuitem m
+                        LEFT JOIN MULTIALTUNIT a ON m.mcode = a.mcode
                         WHERE m.type = 'A' and m.isactive = 1
                     """)
                     items = cursor.fetchall()
@@ -766,6 +772,25 @@ async def process_invoice(
                 )
                 logger.info("Fuzzy matching completed successfully")
                 
+                # Derive isVAT strictly from menuitem.VAT (0/1) using best_match mcode
+                try:
+                    mcode_to_vat = {}
+                    for it in menu_items:
+                        if it and len(it) > 6:
+                            mcode_to_vat[it[1]] = it[6]
+                    for p in products:
+                        bm = p.get('best_match') or {}
+                        mcode = bm.get('mcode')
+                        val = 0
+                        if mcode and mcode in mcode_to_vat:
+                            try:
+                                val = 1 if str(int(mcode_to_vat[mcode])) == '1' else 0
+                            except Exception:
+                                val = 1 if str(mcode_to_vat[mcode]).strip() in ('1','Y','y','true','True') else 0
+                        p['isVAT'] = val
+                except Exception as _e:
+                    logger.warning(f"Failed to compute isVAT from menu items: {_e}")
+
                 db_conn.close()
                 
                 # Clean up response data: remove array fields only, preserve scalar totals

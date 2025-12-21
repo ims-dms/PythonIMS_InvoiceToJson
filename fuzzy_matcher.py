@@ -126,7 +126,7 @@ class FuzzyMatcher:
         self._cache_ttl = cache_ttl
         logger.info(f"FuzzyMatcher initialized with {cache_ttl}s cache TTL")
     
-    def load_menu_items(self, menu_items: List[Tuple[str, str, str, str, any, str]]) -> None:
+    def load_menu_items(self, menu_items: List[Tuple[str, str, str, str, any, str, any]]) -> None:
         """
         Load and cache menu items from database.
         
@@ -149,7 +149,8 @@ class FuzzyMatcher:
                     'menucode': item[2],
                     'baseunit': item[3] if len(item) > 3 else None,
                     'confactor': item[4] if len(item) > 4 else None,
-                    'altunit': item[5] if len(item) > 5 else None
+                    'altunit': item[5] if len(item) > 5 else None,
+                    'vat': item[6] if len(item) > 6 else None
                 })
         
         # Create lookup structures for ultra-fast matching
@@ -161,6 +162,7 @@ class FuzzyMatcher:
             'baseunit_list': [item['baseunit'] for item in processed_items],
             'confactor_list': [item['confactor'] for item in processed_items],
             'altunit_list': [item['altunit'] for item in processed_items],
+            'vat_list': [item['vat'] for item in processed_items],
             'item_count': len(processed_items)
         }
         
@@ -268,6 +270,7 @@ class FuzzyMatcher:
             baseunit = self._cache['baseunit_list'][idx]
             confactor = self._cache['confactor_list'][idx]
             altunit = self._cache['altunit_list'][idx]
+            vat = self._cache['vat_list'][idx]
             
             # Convert None to empty string and handle Decimal type for confactor
             from decimal import Decimal
@@ -282,6 +285,7 @@ class FuzzyMatcher:
                 'baseunit': baseunit if baseunit is not None else '',
                 'confactor': confactor_value,
                 'altunit': altunit if altunit is not None else '',
+                'vat': vat if vat is not None else '',
                 'score': round(score, 2),
                 'rank': rank
             })
@@ -484,7 +488,13 @@ def match_ocr_products(
                 # Now query the table - try with supplier name first, then without
                 # First try: exact match with supplier name
                 cursor.execute("""
-                    SELECT o.DbMcode, o.DbDesca, o.DbMenuCode, mu.BASEUOM as baseunit, mu.CONFACTOR, mu.altunit
+                    SELECT o.DbMcode,
+                           o.DbDesca,
+                           o.DbMenuCode,
+                           mu.BASEUOM as baseunit,
+                           mu.CONFACTOR,
+                           mu.altunit,
+                           m.VAT as vat
                     FROM [docUpload].[OCRMappedData] o
                     LEFT JOIN menuitem m ON o.DbMcode = m.mcode
                     LEFT JOIN MULTIALTUNIT mu ON mu.mcode = o.DbMcode
@@ -496,7 +506,13 @@ def match_ocr_products(
                 if not row:
                     logger.debug(f"No match with supplier '{supplier_name}', trying without supplier constraint")
                     cursor.execute("""
-                        SELECT TOP 1 o.DbMcode, o.DbDesca, o.DbMenuCode, mu.BASEUOM as baseunit, mu.CONFACTOR, mu.altunit
+                        SELECT TOP 1 o.DbMcode,
+                                       o.DbDesca,
+                                       o.DbMenuCode,
+                                       mu.BASEUOM as baseunit,
+                                       mu.CONFACTOR,
+                                       mu.altunit,
+                                       m.VAT as vat
                         FROM [docUpload].[OCRMappedData] o
                         LEFT JOIN menuitem m ON o.DbMcode = m.mcode
                         LEFT JOIN MULTIALTUNIT mu ON mu.mcode = o.DbMcode
@@ -520,6 +536,7 @@ def match_ocr_products(
                         'baseunit': row[3] if (len(row) > 3 and row[3] is not None) else '',
                         'confactor': confactor_value,
                         'altunit': row[5] if (len(row) > 5 and row[5] is not None) else '',
+                        'vat': row[6] if (len(row) > 6 and row[6] is not None) else '',
                         'score': 100.0,  # Exact match
                         'rank': 1
                     }
@@ -540,6 +557,13 @@ def match_ocr_products(
             product['fuzzy_matches'] = [mapped_match]  # Include the mapped match in fuzzy_matches
             product['match_confidence'] = 'high'  # Existing mappings are considered high confidence
             product['mapped_nature'] = 'Existing'
+            # Expose VAT from menuitem and set isVAT (0/1) for client
+            db_vat = mapped_match.get('vat', '')
+            product['menuitem_vat'] = db_vat
+            try:
+                product['isVAT'] = 1 if str(int(db_vat)) == '1' else 0
+            except Exception:
+                product['isVAT'] = 1 if str(db_vat).strip() in ('1','Y','y','true','True') else 0
         else:
             # Not found in mapping, do fuzzy matching
             match_result = matcher.match_single(
@@ -552,6 +576,18 @@ def match_ocr_products(
             # Add match results to product
             product['fuzzy_matches'] = match_result['fuzzy_matches']
             product['best_match'] = match_result['best_match']
+            # Expose VAT from menuitem when available in best match
+            if product['best_match']:
+                db_vat = product['best_match'].get('vat', '')
+                product['menuitem_vat'] = db_vat
+                try:
+                    product['isVAT'] = 1 if str(int(db_vat)) == '1' else 0
+                except Exception:
+                    product['isVAT'] = 1 if str(db_vat).strip() in ('1','Y','y','true','True') else 0
+            else:
+                # No DB match available; set isVAT to 0
+                product['menuitem_vat'] = ''
+                product['isVAT'] = 0
             
             # Classify match confidence
             matches = match_result['fuzzy_matches']

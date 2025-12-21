@@ -64,7 +64,7 @@ class MenuItemCache:
         self._ttl = ttl
         logger.info(f"Cache TTL updated to {ttl}s")
     
-    def load(self, menu_items: List[Tuple[str, str, str, str, any, str]], force: bool = False) -> None:
+    def load(self, menu_items: List[Tuple[str, str, str, str, any, str, any]], force: bool = False) -> None:
         """
         Load menu items into cache.
         
@@ -85,9 +85,9 @@ class MenuItemCache:
                 if item and len(item) >= 2 and item[0] and item[0].strip():
                     # Handle various tuple lengths: 2-tuple, 3-tuple, or 6-tuple
                     if len(item) == 2:
-                        valid_items.append((item[0], item[1], item[1], None, None, None))  # Use mcode as menucode
+                        valid_items.append((item[0], item[1], item[1], None, None, None, None))  # Use mcode as menucode
                     elif len(item) == 3:
-                        valid_items.append((item[0], item[1], item[2] if item[2] else item[1], None, None, None))
+                        valid_items.append((item[0], item[1], item[2] if item[2] else item[1], None, None, None, None))
                     else:
                         valid_items.append((
                             item[0], 
@@ -95,7 +95,8 @@ class MenuItemCache:
                             item[2] if item[2] else item[1],
                             item[3] if len(item) > 3 else None,
                             item[4] if len(item) > 4 else None,
-                            item[5] if len(item) > 5 else None
+                            item[5] if len(item) > 5 else None,
+                            item[6] if len(item) > 6 else None
                         ))
             
             self._cache_data = {
@@ -112,12 +113,12 @@ class MenuItemCache:
                 f"(load #{self._load_count})"
             )
     
-    def get(self) -> Optional[List[Tuple[str, str, str, str, any, str]]]:
+    def get(self) -> Optional[List[Tuple[str, str, str, str, any, str, any]]]:
         """
         Get cached menu items.
         
         Returns:
-            List of (desca, mcode, menucode, baseunit, confactor, altunit) tuples, or None if cache is invalid
+            List of (desca, mcode, menucode, baseunit, confactor, altunit, vat) tuples, or None if cache is invalid
         """
         if not self.is_valid():
             logger.warning("Cache is invalid or expired")
