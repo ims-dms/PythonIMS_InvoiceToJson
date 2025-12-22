@@ -598,12 +598,25 @@ async def process_invoice(
                         if value is None:
                             return 0
                         if isinstance(value, (int, float)):
-                            return float(value)
+                            result = float(value)
+                            # Screen OCR correction: if number is divisible by 1000 (like 10000, 25000)
+                            # it may be misinterpreted "10.000" or "25.000" from screen photos
+                            if result >= 1000 and result % 1000 == 0 and result <= 100000:
+                                candidate = result / 1000.0
+                                if candidate >= 1 and candidate <= 999:  # Reasonable quantity/rate range
+                                    return candidate
+                            return result
                         s = str(value)
                         # Extract first well-formed number token; keep decimals, strip thousands commas
                         m = re.search(r"-?\d[\d,]*\.?\d*", s)
                         if m:
-                            return float(m.group(0).replace(',', ''))
+                            result = float(m.group(0).replace(',', ''))
+                            # Apply same screen OCR correction
+                            if result >= 1000 and result % 1000 == 0 and result <= 100000:
+                                candidate = result / 1000.0
+                                if candidate >= 1 and candidate <= 999:
+                                    return candidate
+                            return result
                     except Exception:
                         pass
                     return 0
