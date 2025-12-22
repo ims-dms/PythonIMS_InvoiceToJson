@@ -212,6 +212,12 @@ Extract data from ALL PAGES of the TAX INVOICE document following these strict r
    - Extract corresponding numbers from the "Quantity", "Shortage", "Breakage", "Leakage", "Batch", "SNO", "Rate", "Discount", "MRP", "VAT", "HSCode", "AltQty", and "Unit" columns across ALL pages.
    - HSCode is very important; ensure HSCode values are accurately extracted from the invoice across ALL pages.
    - Maintain array order consistency across all product-related fields, aggregating from all pages
+   - CRITICAL NUMBER FORMATTING: When extracting numeric values (quantity, rate, discount, mrp, vat, altQty):
+     * The DOT (.) is ALWAYS a DECIMAL SEPARATOR, never a thousands separator
+     * The COMMA (,) is ALWAYS a THOUSANDS SEPARATOR when present
+     * Examples: "10.000" = 10.0 (ten with 3 decimal places), "1,234.56" = 1234.56 (one thousand two hundred thirty-four point five six), "25.000" = 25.0 (twenty-five)
+     * If you see "10.000" extract it as the number 10.0, NOT 10000
+     * If you see "1,000" extract it as the number 1000.0, NOT 1.0
 
 3. Date Formatting:
    - Convert any date format to YYYY-MM-DD
@@ -585,6 +591,23 @@ async def process_invoice(
                                 continue
                     return None
 
+                # Helper to safely parse individual numeric values from strings and mixed inputs
+                def parse_number_safe(value):
+                    import re
+                    try:
+                        if value is None:
+                            return 0
+                        if isinstance(value, (int, float)):
+                            return float(value)
+                        s = str(value)
+                        # Extract first well-formed number token; keep decimals, strip thousands commas
+                        m = re.search(r"-?\d[\d,]*\.?\d*", s)
+                        if m:
+                            return float(m.group(0).replace(',', ''))
+                    except Exception:
+                        pass
+                    return 0
+
                 sub_total = pick_number('subtotal', 'sub_total', 'totalbeforediscount', 'grossamount')
                 # Avoid generic 'discount' which may refer to per-line column
                 discount_total = pick_number('discounttotal', 'totaldiscount', 'discountamount', 'discount_amount')
@@ -608,10 +631,11 @@ async def process_invoice(
                 products = []
                 sku_list = data.get('sku', [])
                 sku_code_list = data.get('sku_code', [])
-                quantity_list = data.get('quantity', [])
-                shortage_list = data.get('shortage', [])
-                breakage_list = data.get('breakage', [])
-                leakage_list = data.get('leakage', [])
+                # Prefer original model outputs (normalized_data) to preserve formatting like "10.000"
+                quantity_list = normalized_data.get('quantity') or data.get('quantity', [])
+                shortage_list = normalized_data.get('shortage') or data.get('shortage', [])
+                breakage_list = normalized_data.get('breakage') or data.get('breakage', [])
+                leakage_list = normalized_data.get('leakage') or data.get('leakage', [])
                 batch_list = normalized_data.get('batch') or []
                 sno_list = data.get('sno', [])
                 rate_list = normalized_data.get('rate') or []
@@ -622,6 +646,17 @@ async def process_invoice(
                 hscode_list = normalized_data.get('hscode') or normalized_data.get('hs_code') or []
                 altqty_list = normalized_data.get('altqty') or normalized_data.get('altquantity') or []
                 unit_list = normalized_data.get('unit') or normalized_data.get('unitofmeasure') or normalized_data.get('uom') or []
+
+                # Sanitize numeric lists early to avoid any downstream mis-parsing
+                quantity_list = [parse_number_safe(x) for x in quantity_list]
+                shortage_list = [parse_number_safe(x) for x in shortage_list]
+                breakage_list = [parse_number_safe(x) for x in breakage_list]
+                leakage_list = [parse_number_safe(x) for x in leakage_list]
+                rate_list = [parse_number_safe(x) for x in rate_list]
+                discount_list = [parse_number_safe(x) for x in discount_list]
+                mrp_list = [parse_number_safe(x) for x in mrp_list]
+                vat_list = [parse_number_safe(x) for x in vat_list]
+                altqty_list = [parse_number_safe(x) for x in altqty_list]
                 
                 max_len = max(
                     len(sku_list), len(sku_code_list), len(quantity_list), len(shortage_list),
@@ -635,6 +670,7 @@ async def process_invoice(
                     product = {
                         "sku": sku_list[i] if i < len(sku_list) else "",
                         "sku_code": sku_code_list[i] if i < len(sku_code_list) else "",
+                        # Already sanitized lists
                         "quantity": quantity_list[i] if i < len(quantity_list) else 0,
                         "shortage": shortage_list[i] if i < len(shortage_list) else 0,
                         "breakage": breakage_list[i] if i < len(breakage_list) else 0,
@@ -650,6 +686,17 @@ async def process_invoice(
                         "unit": unit_list[i] if i < len(unit_list) else ""
                     }
                     products.append(product)
+
+                # Debug log suspicious numeric formats to help diagnose issues in production
+                try:
+                    if products:
+                        sample = products[0]
+                        logger.debug(
+                            f"Numeric parse sample -> qty_raw='{data.get('quantity',[None])[0] if isinstance(data.get('quantity'), list) and data.get('quantity') else None}', "
+                            f"qty_parsed={sample.get('quantity')}, rate_parsed={sample.get('rate')}"
+                        )
+                except Exception:
+                    pass
 
                 # Compute fallback totals from products if OCR didn't provide
                 try:
