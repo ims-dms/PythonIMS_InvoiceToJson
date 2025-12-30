@@ -528,25 +528,80 @@ async def process_invoice(
             
             # Extract and process response
             raw_response = result.output if hasattr(result, 'output') else str(result)
-            logger.info(f"Gemini response length: {len(raw_response)} chars")
-            
+
             try:
-                # Parse JSON response
-                json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', raw_response, re.DOTALL)
-                if json_match:
-                    json_str = json_match.group(1).strip()
-                    logger.info("Found JSON in markdown code block")
-                else:
-                    json_match = re.search(r'\{.*\}', raw_response, re.DOTALL)
-                    if json_match:
-                        json_str = json_match.group(0).strip()
-                        logger.info("Found raw JSON object")
-                    else:
-                        logger.error(f"No JSON found in response")
-                        raise ValueError(f"No JSON found in Gemini response")
-                
-                data = json.loads(json_str)
-                logger.info(f"Successfully parsed JSON with {len(data)} top-level keys")
+                # Robust JSON extraction for multi-page responses (balanced brace matching)
+                def extract_json_object(text: str):
+                    # Prefer code block start if present
+                    md = re.search(r"```(?:json)?\s*", text)
+                    start = md.end() if md else text.find('{')
+                    if start == -1:
+                        return None
+                    brace = 0
+                    in_str = False
+                    esc = False
+                    for i in range(start, len(text)):
+                        ch = text[i]
+                        if in_str:
+                            if esc:
+                                esc = False
+                            elif ch == '\\':
+                                esc = True
+                            elif ch == '"':
+                                in_str = False
+                            continue
+                        else:
+                            if ch == '"':
+                                in_str = True
+                                continue
+                            if ch == '{':
+                                brace += 1
+                            elif ch == '}':
+                                brace -= 1
+                                if brace == 0:
+                                    return text[start:i+1]
+                    return None
+
+                def repair_json(js: str):
+                    # Quote unquoted keys
+                    s = re.sub(r'([\{,]\s*)([A-Za-z_][A-Za-z0-9_]*)\s*:', r'\1"\2":', js)
+                    # Remove trailing commas
+                    s = re.sub(r',\s*([}\]])', r'\1', s)
+                    # Iteratively fix comma/colon errors based on parser position
+                    for _ in range(20):
+                        try:
+                            return json.loads(s)
+                        except json.JSONDecodeError as e:
+                            pos = getattr(e, 'pos', None)
+                            msg = e.msg or ''
+                            if pos is None or pos < 0 or pos > len(s):
+                                break
+                            if "Expecting ',' delimiter" in msg:
+                                s = s[:pos] + ',' + s[pos:]
+                                s = re.sub(r',\s*([}\]])', r'\1', s)
+                                continue
+                            if "Expecting ':' delimiter" in msg:
+                                s = s[:pos] + ':' + s[pos:]
+                                continue
+                            if "property name enclosed in double quotes" in msg:
+                                seg_start = max(0, pos - 50)
+                                seg_end = min(len(s), pos + 50)
+                                seg = s[seg_start:seg_end]
+                                seg = re.sub(r'([\{,]\s*)([A-Za-z_][A-Za-z0-9_]*)\s*:', r'\1"\2":', seg)
+                                s = s[:seg_start] + seg + s[seg_end:]
+                                continue
+                            break
+                    return s
+
+                json_str = extract_json_object(raw_response)
+                if not json_str:
+                    raise ValueError("No JSON found in Gemini response")
+
+                try:
+                    data = json.loads(json_str)
+                except json.JSONDecodeError:
+                    repaired = repair_json(json_str)
+                    data = repaired if isinstance(repaired, (dict, list)) else json.loads(repaired)
                 
                 # Normalize and process data
                 def normalize_key(k):
