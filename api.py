@@ -755,6 +755,13 @@ async def process_invoice(
                     }
                     products.append(product)
 
+                # Drop spurious rows created by misaligned numeric lists (e.g., extra MRP/Rates without SKU)
+                # Keep only rows with at least one identifier present: sku, sku_code, or sno
+                products = [
+                    p for p in products
+                    if (str(p.get('sku') or '').strip() or str(p.get('sku_code') or '').strip() or str(p.get('sno') or '').strip())
+                ]
+
                 # Debug log suspicious numeric formats to help diagnose issues in production
                 try:
                     if products:
