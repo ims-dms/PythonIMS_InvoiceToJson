@@ -715,6 +715,40 @@ async def process_invoice(
                 altqty_list = normalized_data.get('altqty') or normalized_data.get('altquantity') or []
                 unit_list = normalized_data.get('unit') or normalized_data.get('unitofmeasure') or normalized_data.get('uom') or []
 
+                # Disambiguate HSCode vs ItemCode (sku_code): do not let HSCode leak into sku_code
+                def _norm_str(v):
+                    try:
+                        return str(v).strip()
+                    except Exception:
+                        return ""
+
+                def _is_hscode_like(v: str) -> bool:
+                    s = _norm_str(v)
+                    # HS codes are typically 4-8+ digits, with only digits (sometimes with dots)
+                    return bool(re.fullmatch(r"\d{4,10}(?:[.\-]\d{1,4})?", s))
+
+                try:
+                    # If both lists exist and are effectively identical, blank out sku_code_list
+                    if hscode_list and sku_code_list:
+                        total = max(len(hscode_list), len(sku_code_list))
+                        same = 0
+                        for i in range(total):
+                            hs = _norm_str(hscode_list[i]) if i < len(hscode_list) else ""
+                            sc = _norm_str(sku_code_list[i]) if i < len(sku_code_list) else ""
+                            if hs and sc and hs == sc:
+                                same += 1
+                        if total and same / total >= 0.7:
+                            sku_code_list = []
+                    # If HSCode not present but sku_code looks numeric HS codes, move them to hscode
+                    elif (not hscode_list) and sku_code_list:
+                        hslikes = sum(1 for v in sku_code_list if _is_hscode_like(v))
+                        if hslikes and hslikes / len(sku_code_list) >= 0.7:
+                            hscode_list = sku_code_list
+                            sku_code_list = []
+                except Exception:
+                    # Non-fatal; continue with original lists
+                    pass
+
                 # Sanitize numeric lists early to avoid any downstream mis-parsing
                 quantity_list = [parse_number_safe(x) for x in quantity_list]
                 shortage_list = [parse_number_safe(x) for x in shortage_list]
