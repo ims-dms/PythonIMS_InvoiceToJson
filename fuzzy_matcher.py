@@ -145,8 +145,8 @@ class FuzzyMatcher:
                 processed_items.append({
                     'original_desca': original_desca,
                     'preprocessed_desca': preprocessed_desca,
-                    'mcode': item[1],
-                    'menucode': item[2],
+                    'mcode': item[1] if len(item) > 1 else None,
+                    'menucode': item[2] if len(item) > 2 else None,
                     'baseunit': item[3] if len(item) > 3 else None,
                     'confactor': item[4] if len(item) > 4 else None,
                     'altunit': item[5] if len(item) > 5 else None,
@@ -494,7 +494,8 @@ def match_ocr_products(
                            mu.BASEUOM as baseunit,
                            mu.CONFACTOR,
                            mu.altunit,
-                           m.VAT as vat
+                           m.VAT as vat,
+                           m.desca as menu_desca
                     FROM [docUpload].[OCRMappedData] o
                     LEFT JOIN menuitem m ON o.DbMcode = m.mcode
                     LEFT JOIN MULTIALTUNIT mu ON mu.mcode = o.DbMcode
@@ -512,7 +513,8 @@ def match_ocr_products(
                                        mu.BASEUOM as baseunit,
                                        mu.CONFACTOR,
                                        mu.altunit,
-                                       m.VAT as vat
+                                       m.VAT as vat,
+                                       m.desca as menu_desca
                         FROM [docUpload].[OCRMappedData] o
                         LEFT JOIN menuitem m ON o.DbMcode = m.mcode
                         LEFT JOIN MULTIALTUNIT mu ON mu.mcode = o.DbMcode
@@ -529,8 +531,12 @@ def match_ocr_products(
                     if len(row) > 4 and row[4] is not None:
                         confactor_value = float(row[4]) if isinstance(row[4], (int, float, Decimal)) else row[4]
                     
+                    # Prefer explicit DbDesca; if missing, fall back to menuitem.desca; never use mcode as description
+                    fallback_desca = ''
+                    if len(row) > 7 and row[7]:
+                        fallback_desca = row[7]
                     mapped_match = {
-                        'desca': row[1] if row[1] else row[0],
+                        'desca': row[1] if row[1] else fallback_desca,
                         'mcode': row[0],
                         'menucode': row[2] if row[2] else row[0],  # Use DbMenuCode if available, else Dbmcode
                         'baseunit': row[3] if (len(row) > 3 and row[3] is not None) else '',
