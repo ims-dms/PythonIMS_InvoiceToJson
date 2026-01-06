@@ -326,7 +326,8 @@ def validate_response_structure(data: dict) -> bool:
     return all(field in data for field in required_fields)
 
 def normalize_arrays(data: dict) -> dict:
-    array_fields = ['sku', 'quantity', 'shortage', 'breakage', 'leakage', 'hscode', 'altQty', 'unit', 'discount', 'sno']
+    # Include 'sku_code' to keep row alignment stable across pages
+    array_fields = ['sku', 'sku_code', 'quantity', 'shortage', 'breakage', 'leakage', 'hscode', 'altQty', 'unit', 'discount', 'sno']
     max_length = max(len(data.get(field, [])) for field in array_fields)
     
     for field in array_fields:
@@ -609,9 +610,58 @@ async def process_invoice(
 
                 try:
                     data = json.loads(json_str)
-                except json.JSONDecodeError:
-                    repaired = repair_json(json_str)
-                    data = repaired if isinstance(repaired, (dict, list)) else json.loads(repaired)
+                except json.JSONDecodeError as e1:
+                    # Attempt more aggressive repairs for malformed JSON coming from model
+                    def aggressive_repair(s: str):
+                        # Strip non-printable/control characters
+                        s = ''.join(ch for ch in s if ch.isprintable())
+                        # Replace Python-style single quotes with double quotes where safe
+                        s = re.sub(r"(?<=[:\[,\{\s])'([^']*)'(?=[,\]\}\s])", r'"\1"', s)
+                        # Quote unquoted keys (again)
+                        s = re.sub(r'([\{,]\s*)([A-Za-z_][A-Za-z0-9_]*)\s*:', r'\1"\2":', s)
+                        # Replace Python None/True/False with JSON null/true/false
+                        s = s.replace('None', 'null').replace('True', 'true').replace('False', 'false')
+                        # Remove trailing commas before } or ]
+                        s = re.sub(r',\s*([}\]])', r'\1', s)
+                        # If multiple top-level braces, take the largest balanced object
+                        first = s.find('{')
+                        last = s.rfind('}')
+                        if first != -1 and last != -1 and last > first:
+                            s = s[first:last+1]
+                        return s
+
+                    try:
+                        repaired1 = repair_json(json_str)
+                        repaired2 = aggressive_repair(json_str)
+                        parsed = None
+                        # Try repaired1 (existing algorithm) first
+                        if isinstance(repaired1, (dict, list)):
+                            parsed = repaired1
+                        else:
+                            try:
+                                parsed = json.loads(repaired1)
+                            except Exception:
+                                parsed = None
+
+                        # If still not parsed, try aggressive repaired2
+                        if parsed is None:
+                            try:
+                                parsed = json.loads(repaired2)
+                            except Exception:
+                                parsed = None
+
+                        if parsed is None:
+                            # Parsing failed; raise a detailed error for diagnostics
+                            preview_raw = (raw_response[:2000] + '...') if len(raw_response) > 2000 else raw_response
+                            preview_json = (json_str[:1000] + '...') if len(json_str) > 1000 else json_str
+                            raise ValueError(f"JSON parse failed after repairs: original_error={e1}; json_preview={preview_json}; raw_preview={preview_raw}")
+
+                        data = parsed
+                    except Exception as e2:
+                        # Bubble up a clear error including original decode issue and previews
+                        preview_raw = (raw_response[:2000] + '...') if len(raw_response) > 2000 else raw_response
+                        preview_json = (json_str[:1000] + '...') if len(json_str) > 1000 else json_str
+                        raise ValueError(f"JSON parsing error: original={e1}; repair_error={e2}; json_preview={preview_json}; raw_preview={preview_raw}")
                 
                 # Normalize and process data
                 def normalize_key(k):
@@ -755,6 +805,24 @@ async def process_invoice(
                         if hslikes and hslikes / len(sku_code_list) >= 0.7:
                             hscode_list = sku_code_list
                             sku_code_list = []
+                    
+                    # FIX: Move sku_code to sku when sku is empty and sku_code is not purely numeric
+                    # This handles cases like "1212-MM" which are product codes, not HS codes
+                    max_items = max(len(sku_list), len(sku_code_list))
+                    for i in range(max_items):
+                        sku_val = _norm_str(sku_list[i]) if i < len(sku_list) else ""
+                        sku_code_val = _norm_str(sku_code_list[i]) if i < len(sku_code_list) else ""
+                        
+                        # If sku is empty but sku_code exists and is not an HS code
+                        if not sku_val and sku_code_val and not _is_hscode_like(sku_code_val):
+                            # Move sku_code to sku
+                            if i < len(sku_list):
+                                sku_list[i] = sku_code_val
+                            else:
+                                sku_list.append(sku_code_val)
+                            # Clear the sku_code
+                            if i < len(sku_code_list):
+                                sku_code_list[i] = ""
                 except Exception:
                     # Non-fatal; continue with original lists
                     pass
@@ -797,6 +865,9 @@ async def process_invoice(
                         "altQty": altqty_list[i] if i < len(altqty_list) else 0,
                         "unit": unit_list[i] if i < len(unit_list) else ""
                     }
+                    # Do not alter 'sku' even if it looks like a code.
+                    # The user requires whatever appears in the Description column
+                    # to remain in 'sku' exactly as printed.
                     products.append(product)
 
                 # Drop spurious rows created by misaligned numeric lists (e.g., extra MRP/Rates without SKU)
@@ -965,6 +1036,8 @@ async def process_invoice(
                         data.pop(key, None)
                 
                 data['products'] = products
+
+                # Do not perform a post-pass that clears or alters SKU.
                 
                 for key in ['sku_code', 'hscode', 'altQty', 'unit', 'full_sku_names']:
                     data.pop(key, None)
