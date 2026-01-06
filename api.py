@@ -208,10 +208,20 @@ Extract data from ALL PAGES of the TAX INVOICE document following these strict r
 
 2. For product listings:
    - Extract ALL SKUs from the "Description" column across ALL pages. It is very important to ensure that Description values are accurately extracted from the invoice.
+     * IMPORTANT: Product description MUST be actual product names/descriptions (text that describes the product), NEVER numeric codes like HSCode.
+     * IMPORTANT: If the invoice has an "Alias" column, IGNORE it completely. Do NOT map Alias values to the product description (sku field).
+     * Only extract values from the explicit "Description" column, never from Alias, Item Code, or other alternative columns.
    - Extract SKU codes separately as "sku_code" across ALL pages. It is very important to ensure that SKU code values are accurately extracted from the invoice.
-   - Extract corresponding numbers from the "Quantity", "Shortage", "Breakage", "Leakage", "Batch", "SNO", "Rate", "Discount", "MRP", "VAT", "HSCode", "AltQty", and "Unit" columns across ALL pages.
-   - HSCode is very important; ensure HSCode values are accurately extracted from the invoice across ALL pages.
+     * If HSCode and Alias columns are available, IGNORE them. Do NOT map these columns to sku_code.
+     * Only extract actual SKU/Item codes from the explicit "SKU Code" or "Item Code" column.
+   - Extract HSCode values from the "HSCode" column across ALL pages. HSCode is a 4-10 digit numeric code (like 0402, 1901, etc.).
+     * CRITICAL: HSCode MUST NEVER be extracted into the "sku" field (product description).
+     * CRITICAL: If you encounter a numeric code (4-10 digits, possibly with hyphens or dots), it MUST go into the "hscode" field, NOT into "sku".
+     * When in doubt between Description and HSCode: text descriptions go to "sku", numeric codes go to "hscode".
+   - Extract corresponding numbers from the "Quantity", "Shortage", "Breakage", "Leakage", "Batch", "SNO", "Rate", "Discount", "MRP", "VAT", "AltQty", and "Unit" columns across ALL pages.
    - Maintain array order consistency across all product-related fields, aggregating from all pages
+   - CRITICAL: Always prioritize extracting from the explicitly labeled columns (Description, SKU Code, HSCode) and ignore ambiguous or aliased columns.
+   - CRITICAL RULE: Do NOT concatenate or mix HSCode with product description. Keep them strictly separate.
    - CRITICAL NUMBER FORMATTING: When extracting numeric values (quantity, rate, discount, mrp, vat, altQty):
      * The DOT (.) is ALWAYS a DECIMAL SEPARATOR, never a thousands separator
      * The COMMA (,) is ALWAYS a THOUSANDS SEPARATOR when present
