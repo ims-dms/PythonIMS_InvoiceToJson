@@ -190,7 +190,18 @@ def get_gemini_model_and_api_key(company_id: str):
     return model, api_key, token_info
 
 PROCESSING_PROMPT = """
+CRITICAL: You will receive MULTIPLE IMAGES representing different pages of the same invoice document. You MUST process ALL images/pages and combine ALL data into a SINGLE JSON response.
+
 Extract data from ALL PAGES of the TAX INVOICE document following these strict rules. Combine information from all provided images/pages into a single cohesive JSON output:
+
+IMPORTANT MULTI-PAGE INSTRUCTIONS:
+- If you receive multiple images, they are consecutive pages of the SAME invoice
+- Product listings may span across multiple pages - extract products from EVERY page
+- Aggregate all product arrays (sku, quantity, rate, etc.) from all pages into single arrays
+- Header information (invoice_no, dealer_name, etc.) appears on first page - use that
+- DO NOT treat each page as a separate invoice
+- The final JSON must contain ALL products from ALL pages combined
+
 1. Identify fields using common invoice terminology:
    - Order Number → "order_no"
    - Invoice Number → "invoice_no"
@@ -207,21 +218,24 @@ Extract data from ALL PAGES of the TAX INVOICE document following these strict r
    - Invoice Date → "invoice_date"
 
 2. For product listings:
-   - Extract ALL SKUs from the "Description" column across ALL pages. It is very important to ensure that Description values are accurately extracted from the invoice.
-     * IMPORTANT: Product description MUST be actual product names/descriptions (text that describes the product), NEVER numeric codes like HSCode.
-     * IMPORTANT: If the invoice has an "Alias" column, IGNORE it completely. Do NOT map Alias values to the product description (sku field).
-     * Only extract values from the explicit "Description" column, never from Alias, Item Code, or other alternative columns.
-   - Extract SKU codes separately as "sku_code" across ALL pages. It is very important to ensure that SKU code values are accurately extracted from the invoice.
-     * If HSCode and Alias columns are available, IGNORE them. Do NOT map these columns to sku_code.
-     * Only extract actual SKU/Item codes from the explicit "SKU Code" or "Item Code" column.
-   - Extract HSCode values from the "HSCode" column across ALL pages. HSCode is a 4-10 digit numeric code (like 0402, 1901, etc.).
-     * CRITICAL: HSCode MUST NEVER be extracted into the "sku" field (product description).
-     * CRITICAL: If you encounter a numeric code (4-10 digits, possibly with hyphens or dots), it MUST go into the "hscode" field, NOT into "sku".
-     * When in doubt between Description and HSCode: text descriptions go to "sku", numeric codes go to "hscode".
-   - Extract corresponding numbers from the "Quantity", "Shortage", "Breakage", "Leakage", "Batch", "SNO", "Rate", "Discount", "MRP", "VAT", "AltQty", and "Unit" columns across ALL pages.
-   - Maintain array order consistency across all product-related fields, aggregating from all pages
-   - CRITICAL: Always prioritize extracting from the explicitly labeled columns (Description, SKU Code, HSCode) and ignore ambiguous or aliased columns.
-   - CRITICAL RULE: Do NOT concatenate or mix HSCode with product description. Keep them strictly separate.
+     - There is usually a serial-number column labeled "SNO", "SN", "S.N.", or similar. Treat **every row with a serial number** as a distinct product row.
+         * If the SNO values run from 1 to N (e.g., 1–30), your product arrays **MUST contain N entries**. Do not skip any SNO in the middle of the sequence.
+         * If you are unsure about a row, still create a product entry with whatever fields you can read (e.g., sku, quantity, rate) so that the SNO sequence remains continuous.
+     - Extract ALL SKUs from the "Description" column across ALL pages. It is very important to ensure that Description values are accurately extracted from the invoice.
+         * IMPORTANT: Product description MUST be actual product names/descriptions (text that describes the product), NEVER numeric codes like HSCode.
+         * IMPORTANT: If the invoice has an "Alias" column, IGNORE it completely. Do NOT map Alias values to the product description (sku field).
+         * Only extract values from the explicit "Description" column, never from Alias, Item Code, or other alternative columns.
+     - Extract SKU codes separately as "sku_code" across ALL pages. It is very important to ensure that SKU code values are accurately extracted from the invoice.
+         * If HSCode and Alias columns are available, IGNORE them. Do NOT map these columns to sku_code.
+         * Only extract actual SKU/Item codes from the explicit "SKU Code" or "Item Code" column.
+     - Extract HSCode values from the "HSCode" column across ALL pages. HSCode is a 4-10 digit numeric code (like 0402, 1901, etc.).
+         * CRITICAL: HSCode MUST NEVER be extracted into the "sku" field (product description).
+         * CRITICAL: If you encounter a numeric code (4-10 digits, possibly with hyphens or dots), it MUST go into the "hscode" field, NOT into "sku".
+         * When in doubt between Description and HSCode: text descriptions go to "sku", numeric codes go to "hscode".
+     - Extract corresponding numbers from the "Quantity", "Shortage", "Breakage", "Leakage", "Batch", "SNO", "Rate", "Discount", "MRP", "VAT", "AltQty", and "Unit" columns across ALL pages.
+     - Maintain array order consistency across all product-related fields, aggregating from all pages
+     - CRITICAL: Always prioritize extracting from the explicitly labeled columns (Description, SKU Code, HSCode) and ignore ambiguous or aliased columns.
+     - CRITICAL RULE: Do NOT concatenate or mix HSCode with product description. Keep them strictly separate.
    - CRITICAL NUMBER FORMATTING: When extracting numeric values (quantity, rate, discount, mrp, vat, altQty):
      * The DOT (.) is ALWAYS a DECIMAL SEPARATOR, never a thousands separator
      * The COMMA (,) is ALWAYS a THOUSANDS SEPARATOR when present
@@ -275,6 +289,8 @@ Extract data from ALL PAGES of the TAX INVOICE document following these strict r
      - Return empty strings/arrays for missing data; however, totals should be present whenever the invoice has them.
      - Preserve negative signs shown for discount; do not convert to positive.
    - ABSOLUTELY NO ADDITIONAL TEXT OR MARKDOWN
+
+FINAL REMINDER: If multiple images were provided, ensure you have extracted products from EVERY SINGLE PAGE. Your product arrays (sku, quantity, rate, etc.) should contain entries from ALL pages combined, not just the first page.
 """
 
 def convert_pdf_bytes_to_pngs(file_bytes: bytes):
@@ -492,12 +508,14 @@ async def process_invoice(
                 first_img_bytes, first_media = images[0]
                 for img_bytes, media in images:
                     binary_contents.append(BinaryContent(img_bytes, media_type=media))
+                logger.info(f"Created {len(binary_contents)} binary content objects for Gemini processing")
             else:
                 media_type = content_type or 'application/octet-stream'
                 binary_contents.append(BinaryContent(file_content, media_type=media_type))
             
             # Build agent inputs
             agent_inputs = [PROCESSING_PROMPT] + binary_contents
+            logger.info(f"Agent inputs prepared: 1 prompt + {len(binary_contents)} images = {len(agent_inputs)} total inputs")
             
             # Get Gemini model with retry logic
             async def process_with_gemini():
@@ -788,7 +806,7 @@ async def process_invoice(
                     return bool(re.fullmatch(r"\d{4,10}(?:[.\-]\d{1,4})?", s))
 
                 try:
-                    # If both lists exist and are effectively identical, blank out sku_code_list
+                    # Step 1: If both lists exist and are effectively identical, blank out sku_code_list
                     if hscode_list and sku_code_list:
                         total = max(len(hscode_list), len(sku_code_list))
                         same = 0
@@ -799,21 +817,36 @@ async def process_invoice(
                                 same += 1
                         if total and same / total >= 0.7:
                             sku_code_list = []
-                    # If HSCode not present but sku_code looks numeric HS codes, move them to hscode
+                    # Step 2: If HSCode not present but sku_code looks numeric HS codes, move them to hscode
                     elif (not hscode_list) and sku_code_list:
                         hslikes = sum(1 for v in sku_code_list if _is_hscode_like(v))
                         if hslikes and hslikes / len(sku_code_list) >= 0.7:
                             hscode_list = sku_code_list
                             sku_code_list = []
                     
-                    # FIX: Move sku_code to sku when sku is empty and sku_code is not purely numeric
-                    # This handles cases like "1212-MM" which are product codes, not HS codes
-                    max_items = max(len(sku_list), len(sku_code_list))
+                    # Step 3: Move HSCode-like values from sku to hscode when sku incorrectly contains HS codes
+                    # This fixes the issue where OCR extracts "100830" into the description field
+                    max_items = max(len(sku_list), len(sku_code_list), len(hscode_list))
                     for i in range(max_items):
                         sku_val = _norm_str(sku_list[i]) if i < len(sku_list) else ""
                         sku_code_val = _norm_str(sku_code_list[i]) if i < len(sku_code_list) else ""
+                        hs_val = _norm_str(hscode_list[i]) if i < len(hscode_list) else ""
                         
-                        # If sku is empty but sku_code exists and is not an HS code
+                        # If sku contains an HS code (purely numeric), move it to hscode
+                        if sku_val and _is_hscode_like(sku_val):
+                            # Move to hscode if hscode is empty
+                            if not hs_val:
+                                if i < len(hscode_list):
+                                    hscode_list[i] = sku_val
+                                else:
+                                    hscode_list.append(sku_val)
+                            # Clear the sku
+                            if i < len(sku_list):
+                                sku_list[i] = ""
+                            sku_val = ""  # Update for next check
+                        
+                        # If sku is now empty but sku_code exists and is not an HS code, move sku_code to sku
+                        # This handles cases like "1212-MM" which are product codes, not HS codes
                         if not sku_val and sku_code_val and not _is_hscode_like(sku_code_val):
                             # Move sku_code to sku
                             if i < len(sku_list):
@@ -838,10 +871,14 @@ async def process_invoice(
                 vat_list = [parse_number_safe(x) for x in vat_list]
                 altqty_list = [parse_number_safe(x) for x in altqty_list]
                 
+                # Determine the number of product rows based on actual line-item fields
+                # Avoid using SNO length alone, because the model may output extra serial
+                # numbers without corresponding description/amount data, which would
+                # otherwise create empty placeholder products.
                 max_len = max(
                     len(sku_list), len(sku_code_list), len(quantity_list), len(shortage_list),
                     len(breakage_list), len(leakage_list), len(batch_list),
-                    len(sno_list), len(rate_list), len(discount_list),
+                    len(rate_list), len(discount_list),
                     len(mrp_list), len(vat_list), len(hscode_list),
                     len(altqty_list), len(unit_list)
                 )
@@ -870,12 +907,15 @@ async def process_invoice(
                     # to remain in 'sku' exactly as printed.
                     products.append(product)
 
-                # Drop spurious rows created by misaligned numeric lists (e.g., extra MRP/Rates without SKU)
-                # Keep only rows with at least one identifier present: sku, sku_code, or sno
+                # Drop spurious rows created by misaligned numeric lists (e.g., extra SNO values
+                # without any description/code or meaningful quantities).
+                # Keep only rows that have at least a product description or a sku_code.
                 products = [
                     p for p in products
-                    if (str(p.get('sku') or '').strip() or str(p.get('sku_code') or '').strip() or str(p.get('sno') or '').strip())
+                    if (str(p.get('sku') or '').strip() or str(p.get('sku_code') or '').strip())
                 ]
+                
+                logger.info(f"Extracted {len(products)} products after filtering (sent {len(binary_contents)} pages to Gemini)")
 
                 # Debug log suspicious numeric formats to help diagnose issues in production
                 try:
