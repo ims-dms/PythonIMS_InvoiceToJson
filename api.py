@@ -639,6 +639,10 @@ async def process_invoice(
                         s = re.sub(r'([\{,]\s*)([A-Za-z_][A-Za-z0-9_]*)\s*:', r'\1"\2":', s)
                         # Replace Python None/True/False with JSON null/true/false
                         s = s.replace('None', 'null').replace('True', 'true').replace('False', 'false')
+                        # Remove thousands separators from numbers (e.g., 8,841.35 -> 8841.35)
+                        s = re.sub(r':\s*(\d{1,3}(?:,\d{3})+(?:\.\d+)?)', lambda m: ':' + m.group(1).replace(',', ''), s)
+                        s = re.sub(r'\[\s*(\d{1,3}(?:,\d{3})+(?:\.\d+)?)', lambda m: '[' + m.group(1).replace(',', ''), s)
+                        s = re.sub(r',\s*(\d{1,3}(?:,\d{3})+(?:\.\d+)?)', lambda m: ',' + m.group(1).replace(',', ''), s)
                         # Remove trailing commas before } or ]
                         s = re.sub(r',\s*([}\]])', r'\1', s)
                         # If multiple top-level braces, take the largest balanced object
