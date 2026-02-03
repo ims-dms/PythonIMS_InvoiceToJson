@@ -830,6 +830,7 @@
         "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
       ],
       "configFilePaths": [
+        "C:\\BzuMah\\Office\\Development\\WebPosVariant\\NuGet.Config",
         "C:\\Users\\Dell\\AppData\\Roaming\\NuGet\\NuGet.Config",
         "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config",
         "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
@@ -838,9 +839,13 @@
         "net6.0"
       ],
       "sources": {
+        "C:\\BzuMah\\Office\\Development\\WebPosVariant\\LocalNugetFeed\\": {},
         "C:\\BzuMah\\Office\\Others\\IMSCustomFieldExtension": {},
         "C:\\BzuMah\\Office\\Others\\pdfcreator": {},
         "C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\": {},
+        "C:\\Users\\Dell\\.nuget\\packages\\ims.jwtauth.library\\1.0.0": {},
+        "C:\\Users\\Dell\\Downloads\\CustomerVendor_Nuget\\CustomerVendor_Nuget": {},
+        "http://192.168.125.199:81/v3/index.json": {},
         "https://api.nuget.org/v3/index.json": {}
       },
       "frameworks": {
@@ -859,7 +864,7 @@
         "auditLevel": "low",
         "auditMode": "direct"
       },
-      "SdkAnalysisLevel": "9.0.200"
+      "SdkAnalysisLevel": "9.0.300"
     },
     "frameworks": {
       "net6.0": {
@@ -886,8 +891,16 @@
             "privateAssets": "all"
           }
         },
-        "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.203\\RuntimeIdentifierGraph.json"
+        "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.310\\RuntimeIdentifierGraph.json"
       }
     }
-  }
+  },
+  "logs": [
+    {
+      "code": "NU1900",
+      "level": "Warning",
+      "warningLevel": 1,
+      "message": "Error occurred while getting package vulnerability data: Unable to load the service index for source http://192.168.125.199:81/v3/index.json."
+    }
+  ]
 }

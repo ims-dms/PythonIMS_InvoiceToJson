@@ -236,6 +236,15 @@ IMPORTANT MULTI-PAGE INSTRUCTIONS:
      - Maintain array order consistency across all product-related fields, aggregating from all pages
      - CRITICAL: Always prioritize extracting from the explicitly labeled columns (Description, SKU Code, HSCode) and ignore ambiguous or aliased columns.
      - CRITICAL RULE: Do NOT concatenate or mix HSCode with product description. Keep them strictly separate.
+   
+   - CRITICAL RATE AND DISCOUNT EXTRACTION:
+     * The "Rate" column contains the per-unit price for each product line. Read ALL digits carefully - typical rates are 3-digit to 6-digit numbers with decimals (e.g., 110.62, 221.24, 1234.56).
+     * NEVER skip leading digits. If a rate looks like "110.62", extract exactly 110.62, NOT 10.62 or 0.62.
+     * The "Discount" column contains per-line discount amounts. This is often a separate column AFTER the Rate column. Extract the exact discount value for EACH row.
+     * If a discount value appears as blank or empty for a row, use 0.0 for that row, but always check if there IS a discount column with values.
+     * Pay close attention to column boundaries - Rate and Discount are usually adjacent columns. Do NOT confuse or merge values between these columns.
+     * Verify extraction: Rate values typically range from 10 to 10000; Discount values typically range from 0 to the rate value itself.
+   
    - CRITICAL NUMBER FORMATTING: When extracting numeric values (quantity, rate, discount, mrp, vat, altQty):
      * The DOT (.) is ALWAYS a DECIMAL SEPARATOR, never a thousands separator
      * The COMMA (,) is ALWAYS a THOUSANDS SEPARATOR when present
@@ -290,6 +299,11 @@ IMPORTANT MULTI-PAGE INSTRUCTIONS:
      - Preserve negative signs shown for discount; do not convert to positive.
    - ABSOLUTELY NO ADDITIONAL TEXT OR MARKDOWN
 
+IMPORTANT VERIFICATION - Before finalizing your response:
+   - Double-check the "rate" array: Each rate value should include ALL visible digits. Rates like 110.62 should NOT become 10.62.
+   - Double-check the "discount" array: If a Discount column exists in the invoice, extract the per-line discount values. Do NOT return all zeros if discounts are clearly visible.
+   - Cross-verify: The "Amount" column (if present) should approximately equal Rate × Quantity - Discount for each row.
+
 FINAL REMINDER: If multiple images were provided, ensure you have extracted products from EVERY SINGLE PAGE. Your product arrays (sku, quantity, rate, etc.) should contain entries from ALL pages combined, not just the first page.
 """
 
@@ -343,12 +357,13 @@ def validate_response_structure(data: dict) -> bool:
 
 def normalize_arrays(data: dict) -> dict:
     # Include 'sku_code' to keep row alignment stable across pages
-    array_fields = ['sku', 'sku_code', 'quantity', 'shortage', 'breakage', 'leakage', 'hscode', 'altQty', 'unit', 'discount', 'sno']
+    # Also include 'rate' so that per-line arrays remain aligned even if a page is missing values
+    array_fields = ['sku', 'sku_code', 'quantity', 'shortage', 'breakage', 'leakage', 'hscode', 'altQty', 'unit', 'discount', 'rate', 'sno']
     max_length = max(len(data.get(field, [])) for field in array_fields)
     
     for field in array_fields:
         if len(data.get(field, [])) != max_length:
-            if field in ['quantity', 'shortage', 'breakage', 'leakage', 'altQty', 'discount']:
+            if field in ['quantity', 'shortage', 'breakage', 'leakage', 'altQty', 'discount', 'rate']:
                 data[field] = data.get(field, []) + [0]*(max_length - len(data.get(field, [])))
             else:
                 data[field] = data.get(field, []) + [""]*(max_length - len(data.get(field, [])))
@@ -640,9 +655,13 @@ async def process_invoice(
                         # Replace Python None/True/False with JSON null/true/false
                         s = s.replace('None', 'null').replace('True', 'true').replace('False', 'false')
                         # Remove thousands separators from numbers (e.g., 8,841.35 -> 8841.35)
+                        # Target common positions first
                         s = re.sub(r':\s*(\d{1,3}(?:,\d{3})+(?:\.\d+)?)', lambda m: ':' + m.group(1).replace(',', ''), s)
                         s = re.sub(r'\[\s*(\d{1,3}(?:,\d{3})+(?:\.\d+)?)', lambda m: '[' + m.group(1).replace(',', ''), s)
                         s = re.sub(r',\s*(\d{1,3}(?:,\d{3})+(?:\.\d+)?)', lambda m: ',' + m.group(1).replace(',', ''), s)
+                        # Global fallback: remove commas in numeric tokens not inside quotes
+                        s = re.sub(r'(?<!\")((?:-)?\d{1,3}(?:,\d{3})+(?:\.\d+)?)(?!\")',
+                                   lambda m: m.group(1).replace(',', ''), s)
                         # Remove trailing commas before } or ]
                         s = re.sub(r',\s*([}\]])', r'\1', s)
                         # If multiple top-level braces, take the largest balanced object
@@ -744,16 +763,44 @@ async def process_invoice(
                                     return candidate
                             return result
                         s = str(value)
+                        # OCR normalization: fix ambiguous leading characters commonly mistaken for digits
+                        # Example: 'I10.62' or 'l10.62' or '|10.62' should be treated as '110.62'
+                        s_norm = s
+                        # If a token starts with I/l/| followed by digits, convert the leading char to '1'
+                        s_norm = re.sub(r"\b[Il\|](?=\d)", "1", s_norm)
+                        # Sometimes 'O' may be used instead of '0' adjacent to digits
+                        s_norm = re.sub(r"(?<=\d)[Oo](?=\d)", "0", s_norm)
+
                         # Extract first well-formed number token; keep decimals, strip thousands commas
-                        m = re.search(r"-?\d[\d,]*\.?\d*", s)
+                        m = re.search(r"-?\d[\d,]*\.?\d*", s_norm)
+                        candidate_result = None
                         if m:
-                            result = float(m.group(0).replace(',', ''))
-                            # Apply same screen OCR correction
-                            if result >= 1000 and result % 1000 == 0 and result <= 100000:
-                                candidate = result / 1000.0
+                            token = m.group(0)
+                            try:
+                                candidate_result = float(token.replace(',', ''))
+                            except Exception:
+                                candidate_result = None
+
+                        # Secondary attempt: allow optional leading I/l/| inside the token and replace with '1'
+                        if candidate_result is None or (candidate_result < 20 and re.search(r"\b[Il\|]\d", s)):
+                            m2 = re.search(r"[Il\|]?\d[\d,]*\.?\d*", s)
+                            if m2:
+                                token2 = m2.group(0).replace('I', '1').replace('l', '1').replace('|', '1')
+                                try:
+                                    candidate2 = float(token2.replace(',', ''))
+                                    # Prefer candidate2 if it looks more reasonable for rate-like values
+                                    if candidate_result is None or candidate2 >= 20 > candidate_result:
+                                        candidate_result = candidate2
+                                except Exception:
+                                    pass
+
+                        if candidate_result is not None:
+                            # Apply the screen OCR thousands-separator correction if needed
+                            if candidate_result >= 1000 and candidate_result % 1000 == 0 and candidate_result <= 100000:
+                                candidate = candidate_result / 1000.0
                                 if candidate >= 1 and candidate <= 999:
                                     return candidate
-                            return result
+                            return candidate_result
                     except Exception:
                         pass
                     return 0
@@ -788,9 +835,16 @@ async def process_invoice(
                 leakage_list = normalized_data.get('leakage') or data.get('leakage', [])
                 batch_list = normalized_data.get('batch') or []
                 sno_list = data.get('sno', [])
-                rate_list = normalized_data.get('rate') or []
+                rate_list = normalized_data.get('rate') or data.get('rate', []) or []
                 # Ensure we only treat per-line discounts as lists; scalar invoice discounts are handled separately
-                discount_list = data.get('discount', []) if isinstance(data.get('discount'), list) else []
+                discount_list_raw = (
+                    normalized_data.get('discount')
+                    or normalized_data.get('discountamount')
+                    or normalized_data.get('discount_value')
+                    or data.get('discount')
+                    or []
+                )
+                discount_list = discount_list_raw if isinstance(discount_list_raw, list) else []
                 mrp_list = normalized_data.get('mrp') or normalized_data.get('mrpvalue') or []
                 vat_list = (normalized_data.get('vat') or normalized_data.get('vatvalue') or []) if isinstance((normalized_data.get('vat') or normalized_data.get('vatvalue') or []), list) else []
                 hscode_list = normalized_data.get('hscode') or normalized_data.get('hs_code') or []
@@ -874,6 +928,17 @@ async def process_invoice(
                 mrp_list = [parse_number_safe(x) for x in mrp_list]
                 vat_list = [parse_number_safe(x) for x in vat_list]
                 altqty_list = [parse_number_safe(x) for x in altqty_list]
+
+                # Heuristic correction: if a rate looks unrealistically low and per-line discount exceeds it,
+                # it likely lost a leading '1' during OCR (e.g., 110.62 -> 10.62). Add 100 in such cases.
+                try:
+                    for i in range(min(len(rate_list), len(discount_list))):
+                        r = float(rate_list[i] or 0)
+                        d = float(discount_list[i] or 0)
+                        if r > 0 and r < 20 and d > r:
+                            rate_list[i] = r + 100.0
+                except Exception:
+                    pass
                 
                 # Determine the number of product rows based on actual line-item fields
                 # Avoid using SNO length alone, because the model may output extra serial
@@ -925,9 +990,12 @@ async def process_invoice(
                 try:
                     if products:
                         sample = products[0]
+                        qty_raw = data.get('quantity',[None])[0] if isinstance(data.get('quantity'), list) and data.get('quantity') else None
+                        rate_raw = data.get('rate',[None])[0] if isinstance(data.get('rate'), list) and data.get('rate') else None
+                        discount_raw = data.get('discount',[None])[0] if isinstance(data.get('discount'), list) and data.get('discount') else None
                         logger.debug(
-                            f"Numeric parse sample -> qty_raw='{data.get('quantity',[None])[0] if isinstance(data.get('quantity'), list) and data.get('quantity') else None}', "
-                            f"qty_parsed={sample.get('quantity')}, rate_parsed={sample.get('rate')}"
+                            f"Numeric parse sample -> qty_raw='{qty_raw}', rate_raw='{rate_raw}', discount_raw='{discount_raw}', "
+                            f"qty_parsed={sample.get('quantity')}, rate_parsed={sample.get('rate')}, discount_parsed={sample.get('discount')}"
                         )
                 except Exception:
                     pass
