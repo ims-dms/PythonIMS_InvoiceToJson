@@ -9,3 +9,6 @@ pdf2image
 PyMuPDF
 requests
 tenacity
+# Vector Search Dependencies
+qdrant-client>=1.7.0
+google-generativeai>=0.4.0

@@ -1,3 +1,9 @@
+
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+python sync_vectors.py
+docker-compose up -d qdrant
+
+
 IMS Software Tax Invoice Processor
 
 Installation
@@ -11,6 +17,9 @@ pip install -r requirements.txt
 
 Running the Application
 -----------------------
+
+
+
 
 To start the FastAPI server with auto-reload, run:
 

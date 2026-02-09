@@ -20,6 +20,16 @@ from db_logger import ApplicationLogger, log_retry_attempts
 from fuzzy_matcher import match_ocr_products, format_api_response, minimize_error_message, api_error_response
 from menu_cache import get_cached_menu_items, get_cache_stats, invalidate_cache
 
+# Vector search imports (optional - gracefully handle if not configured)
+try:
+    from vector_api import vector_router
+    from vector_init import get_vector_system, initialize_vector_search_system
+    from vector_matcher import match_ocr_products_vector, get_vector_matcher
+    VECTOR_SEARCH_AVAILABLE = True
+except ImportError as e:
+    VECTOR_SEARCH_AVAILABLE = False
+    logging.warning(f"Vector search not available: {e}")
+
 # Configure application logging (console output disabled by default to reduce noise)
 ApplicationLogger.configure(log_level=logging.INFO, console=False)
 logger = ApplicationLogger.get_logger(__name__)
@@ -51,6 +61,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Register vector search API routes if available
+if VECTOR_SEARCH_AVAILABLE:
+    app.include_router(vector_router)
+    logger.info("Vector search API routes registered at /vector/*")
 
 # Debug endpoint to inspect tokens in database and help diagnose "No active token" errors
 @app.get("/debug/tokens")
@@ -186,7 +201,8 @@ def get_gemini_model_and_api_key(company_id: str):
         })
     api_key = token_info.get('api_key')
     provider = GoogleGLAProvider(api_key=api_key)
-    model = GeminiModel('gemini-2.0-flash-lite', provider=provider)
+    # Use gemini-2.0-flash for better OCR accuracy (not flash-lite)
+    model = GeminiModel('gemini-2.0-flash', provider=provider)
     return model, api_key, token_info
 
 PROCESSING_PROMPT = """
@@ -221,6 +237,7 @@ IMPORTANT MULTI-PAGE INSTRUCTIONS:
      - There is usually a serial-number column labeled "SNO", "SN", "S.N.", or similar. Treat **every row with a serial number** as a distinct product row.
          * If the SNO values run from 1 to N (e.g., 1–30), your product arrays **MUST contain N entries**. Do not skip any SNO in the middle of the sequence.
          * If you are unsure about a row, still create a product entry with whatever fields you can read (e.g., sku, quantity, rate) so that the SNO sequence remains continuous.
+         * NEVER MERGE TWO ROWS INTO ONE. Each row in the invoice table MUST produce exactly one entry in every array (sku, quantity, rate, etc.)
      - Extract ALL SKUs from the "Description" column across ALL pages. It is very important to ensure that Description values are accurately extracted from the invoice.
          * IMPORTANT: Product description MUST be actual product names/descriptions (text that describes the product), NEVER numeric codes like HSCode.
          * IMPORTANT: If the invoice has an "Alias" column, IGNORE it completely. Do NOT map Alias values to the product description (sku field).
@@ -236,6 +253,17 @@ IMPORTANT MULTI-PAGE INSTRUCTIONS:
      - Maintain array order consistency across all product-related fields, aggregating from all pages
      - CRITICAL: Always prioritize extracting from the explicitly labeled columns (Description, SKU Code, HSCode) and ignore ambiguous or aliased columns.
      - CRITICAL RULE: Do NOT concatenate or mix HSCode with product description. Keep them strictly separate.
+
+   - ABSOLUTE CHARACTER ACCURACY FOR SKU CODES:
+     * Pay EXTREME attention to distinguish between similar-looking characters in SKU/Item codes:
+       - The letter "i" (lowercase i) vs digit "1" (one) - look at serifs, height, and context
+       - The letter "I" (uppercase I) vs digit "1" (one) vs letter "l" (lowercase L)
+       - The letter "R" vs digit "1" followed by another character
+       - The letter "O" (uppercase O) vs digit "0" (zero)
+       - The letter "T" vs digit "1" - look at the horizontal bar
+     * Example: "1216-i-R1" should NOT become "1216-1-RT" - preserve exact characters
+     * When uncertain, prefer letters in alphanumeric product codes (like R1, i, etc.)
+     * Read EACH character individually and verify it matches what you see in the image
    
    - CRITICAL RATE AND DISCOUNT EXTRACTION:
      * The "Rate" column contains the per-unit price for each product line. Read ALL digits carefully - typical rates are 3-digit to 6-digit numbers with decimals (e.g., 110.62, 221.24, 1234.56).
@@ -245,12 +273,17 @@ IMPORTANT MULTI-PAGE INSTRUCTIONS:
      * Pay close attention to column boundaries - Rate and Discount are usually adjacent columns. Do NOT confuse or merge values between these columns.
      * Verify extraction: Rate values typically range from 10 to 10000; Discount values typically range from 0 to the rate value itself.
    
-   - CRITICAL NUMBER FORMATTING: When extracting numeric values (quantity, rate, discount, mrp, vat, altQty):
-     * The DOT (.) is ALWAYS a DECIMAL SEPARATOR, never a thousands separator
-     * The COMMA (,) is ALWAYS a THOUSANDS SEPARATOR when present
-     * Examples: "10.000" = 10.0 (ten with 3 decimal places), "1,234.56" = 1234.56 (one thousand two hundred thirty-four point five six), "25.000" = 25.0 (twenty-five)
-     * If you see "10.000" extract it as the number 10.0, NOT 10000
-     * If you see "1,000" extract it as the number 1000.0, NOT 1.0
+   - CRITICAL NUMBER FORMATTING - INDIAN/NEPALI INVOICE CONVENTION:
+     * In Indian/Nepali invoices, numbers are formatted with DOT (.) as DECIMAL separator
+     * "10.000" means TEN (10) with 3 decimal places showing precision, NOT ten thousand
+     * "100.000" means ONE HUNDRED (100), NOT one hundred thousand
+     * "25.000" means TWENTY-FIVE (25), NOT twenty-five thousand
+     * "4.000" means FOUR (4), NOT four thousand
+     * The trailing zeros after decimal (like .000) indicate precision, not magnitude
+     * COMMA (,) is used as thousands separator: "1,234.56" = 1234.56
+     * RULE: If you see "X.000" where X is a small number (1-999), the value is just X, not X*1000
+     * For quantities: typical values are 1-500 units. If you extract 10000 for quantity, it's likely wrong - should be 10.000 = 10
+     * For amounts: if Amount column shows "10.000", it means ₹10.00, not ₹10,000
 
 3. Date Formatting:
    - Convert any date format to YYYY-MM-DD
@@ -331,8 +364,8 @@ def convert_pdf_bytes_to_pngs(file_bytes: bytes):
             out = []
             for page_no in range(doc.page_count):
                 page = doc.load_page(page_no)
-                # render at 2x for better OCR quality
-                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+                # render at 4x for maximum OCR quality - critical for accurate text extraction
+                pix = page.get_pixmap(matrix=fitz.Matrix(4, 4))
                 img_bytes = pix.tobytes('png')
                 out.append((img_bytes, 'image/png'))
             return out
@@ -748,21 +781,54 @@ async def process_invoice(
                     return None
 
                 # Helper to safely parse individual numeric values from strings and mixed inputs
-                def parse_number_safe(value):
+                # Handles Indian/Nepali invoice format where "10.000" means 10 (not 10000)
+                def parse_number_safe(value, field_type='generic'):
+                    """
+                    Parse numeric value with awareness of Indian/Nepali invoice conventions.
+                    field_type: 'quantity' | 'rate' | 'discount' | 'amount' | 'generic'
+                    
+                    Key rules:
+                    - "10.000" = 10.0 (trailing zeros after decimal indicate precision)
+                    - "1,234.56" = 1234.56 (comma is thousands separator)
+                    - Quantities are typically 1-500, amounts 10-50000
+                    """
                     import re
                     try:
                         if value is None:
                             return 0
+                        
+                        # If already a number, check for misinterpretation
                         if isinstance(value, (int, float)):
                             result = float(value)
-                            # Screen OCR correction: if number is divisible by 1000 (like 10000, 25000)
-                            # it may be misinterpreted "10.000" or "25.000" from screen photos
-                            if result >= 1000 and result % 1000 == 0 and result <= 100000:
-                                candidate = result / 1000.0
-                                if candidate >= 1 and candidate <= 999:  # Reasonable quantity/rate range
-                                    return candidate
+                            
+                            # Heuristic: If Gemini returned an integer that's exactly X000 
+                            # and X is a reasonable small number, it likely misread "X.000" as X000
+                            # This applies to quantities and amounts
+                            if result >= 1000 and result % 1000 == 0 and result <= 500000:
+                                base_value = result / 1000.0
+                                # For quantities: typical range is 1-500
+                                if field_type == 'quantity' and 1 <= base_value <= 500:
+                                    return base_value
+                                # For amounts: if base is reasonable (1-500), likely misread
+                                if field_type in ['amount', 'generic'] and 1 <= base_value <= 500:
+                                    return base_value
+                            
+                            # Also check for X00 pattern (e.g., 100 from "1.00" misread as 100)
+                            if result >= 100 and result % 100 == 0 and result <= 50000:
+                                base_value = result / 100.0
+                                if field_type == 'quantity' and 1 <= base_value <= 500:
+                                    return base_value
+                                    
                             return result
-                        s = str(value)
+                        
+                        s = str(value).strip()
+                        
+                        # Direct handling: if string looks like "X.000" format (precision zeros)
+                        # Match patterns like "10.000", "100.000", "4.000" etc.
+                        precision_match = re.match(r'^(-?\d{1,4})\.0{2,3}$', s)
+                        if precision_match:
+                            return float(precision_match.group(1))
+                        
                         # OCR normalization: fix ambiguous leading characters commonly mistaken for digits
                         # Example: 'I10.62' or 'l10.62' or '|10.62' should be treated as '110.62'
                         s_norm = s
@@ -795,15 +861,19 @@ async def process_invoice(
                                     pass
 
                         if candidate_result is not None:
-                            # Apply the screen OCR thousands-separator correction if needed
-                            if candidate_result >= 1000 and candidate_result % 1000 == 0 and candidate_result <= 100000:
-                                candidate = candidate_result / 1000.0
-                                if candidate >= 1 and candidate <= 999:
-                                    return candidate
+                            # Apply the thousands-separator correction for misinterpreted values
+                            # e.g., "10.000" was parsed as 10.0 correctly, but if it was parsed as 10000...
+                            if candidate_result >= 1000 and candidate_result % 1000 == 0 and candidate_result <= 500000:
+                                base_value = candidate_result / 1000.0
+                                if field_type == 'quantity' and 1 <= base_value <= 500:
+                                    return base_value
+                                if field_type in ['amount', 'generic'] and 1 <= base_value <= 500:
+                                    return base_value
                             return candidate_result
                     except Exception:
                         pass
                     return 0
+
 
                 sub_total = pick_number('subtotal', 'sub_total', 'totalbeforediscount', 'grossamount')
                 # Avoid generic 'discount' which may refer to per-line column
@@ -919,15 +989,16 @@ async def process_invoice(
                     pass
 
                 # Sanitize numeric lists early to avoid any downstream mis-parsing
-                quantity_list = [parse_number_safe(x) for x in quantity_list]
-                shortage_list = [parse_number_safe(x) for x in shortage_list]
-                breakage_list = [parse_number_safe(x) for x in breakage_list]
-                leakage_list = [parse_number_safe(x) for x in leakage_list]
-                rate_list = [parse_number_safe(x) for x in rate_list]
-                discount_list = [parse_number_safe(x) for x in discount_list]
-                mrp_list = [parse_number_safe(x) for x in mrp_list]
-                vat_list = [parse_number_safe(x) for x in vat_list]
-                altqty_list = [parse_number_safe(x) for x in altqty_list]
+                # Use field_type parameter for context-aware parsing (handles "10.000" = 10 issue)
+                quantity_list = [parse_number_safe(x, 'quantity') for x in quantity_list]
+                shortage_list = [parse_number_safe(x, 'quantity') for x in shortage_list]
+                breakage_list = [parse_number_safe(x, 'quantity') for x in breakage_list]
+                leakage_list = [parse_number_safe(x, 'quantity') for x in leakage_list]
+                rate_list = [parse_number_safe(x, 'rate') for x in rate_list]
+                discount_list = [parse_number_safe(x, 'discount') for x in discount_list]
+                mrp_list = [parse_number_safe(x, 'rate') for x in mrp_list]
+                vat_list = [parse_number_safe(x, 'amount') for x in vat_list]
+                altqty_list = [parse_number_safe(x, 'quantity') for x in altqty_list]
 
                 # Heuristic correction: if a rate looks unrealistically low and per-line discount exceeds it,
                 # it likely lost a leading '1' during OCR (e.g., 110.62 -> 10.62). Add 100 in such cases.
@@ -955,7 +1026,7 @@ async def process_invoice(
                 for i in range(max_len):
                     product = {
                         "sku": sku_list[i] if i < len(sku_list) else "",
-                        "sku_code": sku_code_list[i] if i < len(sku_code_list) else "",
+                        "sku_code": sku_code_list[i] if i < len(sku_code_list) else "", 
                         # Already sanitized lists
                         "quantity": quantity_list[i] if i < len(quantity_list) else 0,
                         "shortage": shortage_list[i] if i < len(shortage_list) else 0,
@@ -1105,21 +1176,52 @@ async def process_invoice(
                 else:
                     db_conn = get_connection()
                 
-                # Apply fuzzy matching to products
-                logger.info(f"Starting fuzzy matching for {len(products)} products...")
+                # Apply vector search matching to products
                 supplier_name = (data.get('company_name', '') or '').strip()
                 logger.info(f"Supplier name extracted from invoice: '{supplier_name}'")
                 logger.info(f"Database connection available: {db_conn is not None}")
                 
-                products = match_ocr_products(
-                    ocr_products=products,
-                    menu_items=menu_items,
-                    top_k=3,
-                    score_cutoff=60.0,
-                    connection=db_conn,
-                    supplier_name=supplier_name
-                )
-                logger.info("Fuzzy matching completed successfully")
+                # Vector-only matching (no fuzzy fallback)
+                if VECTOR_SEARCH_AVAILABLE:
+                    try:
+                        vector_system = get_vector_system()
+                        if vector_system.is_ready:
+                            logger.info(f"Using VECTOR SEARCH for {len(products)} products...")
+                            products = match_ocr_products_vector(
+                                ocr_products=products,
+                                menu_items=menu_items,
+                                top_k=3,
+                                score_cutoff=0.60,
+                                connection=db_conn,
+                                supplier_name=supplier_name,
+                                use_vector=True
+                            )
+                            logger.info("Vector search matching completed successfully")
+                        else:
+                            logger.error("Vector system not ready - ensure Qdrant is running and synced")
+                            # Mark products as not matched when vector search unavailable
+                            for p in products:
+                                p['fuzzy_matches'] = []
+                                p['best_match'] = None
+                                p['match_confidence'] = 'none'
+                                p['mapped_nature'] = 'Not Matched'
+                                p['match_method'] = 'vector_unavailable'
+                    except Exception as vec_err:
+                        logger.error(f"Vector search failed: {vec_err}")
+                        for p in products:
+                            p['fuzzy_matches'] = []
+                            p['best_match'] = None
+                            p['match_confidence'] = 'none'
+                            p['mapped_nature'] = 'Not Matched'
+                            p['match_method'] = 'vector_error'
+                else:
+                    logger.error("Vector search not available - please install required packages")
+                    for p in products:
+                        p['fuzzy_matches'] = []
+                        p['best_match'] = None
+                        p['match_confidence'] = 'none'
+                        p['mapped_nature'] = 'Not Matched'
+                        p['match_method'] = 'not_configured'
                 
                 # Derive isVAT strictly from menuitem.VAT (0/1) using best_match mcode
                 try:
@@ -1284,9 +1386,58 @@ async def cache_invalidate():
 
 import asyncio
 
+
+def get_gemini_api_key_from_db():
+    """Get Gemini API key from database TokenMaster table."""
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        # Look for any active Gemini/Google token
+        cursor.execute("""
+            SELECT TOP 1 ApiKey FROM [docUpload].TokenMaster 
+            WHERE Status = 'Active' AND Provider IN ('Gemini', 'Google', 'gemini', 'google')
+            ORDER BY CreatedAt DESC
+        """)
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        if row and row[0]:
+            return row[0]
+    except Exception as e:
+        logger.debug(f"Could not get Gemini API key from database: {e}")
+    return None
+
+
+def get_gemini_api_key():
+    """Get Gemini API key from environment, appSetting.txt, or database."""
+    # 1. Check environment variable
+    key = os.getenv("GEMINI_API_KEY")
+    if key:
+        return key
+    
+    # 2. Check appSetting.txt
+    try:
+        with open('appSetting.txt', 'r') as f:
+            for line in f:
+                if line.startswith('GEMINI_API_KEY='):
+                    key = line.split('=', 1)[1].strip()
+                    if key:
+                        return key
+    except FileNotFoundError:
+        pass
+    
+    # 3. Try to get from database TokenMaster
+    key = get_gemini_api_key_from_db()
+    if key:
+        logger.info("Using Gemini API key from database TokenMaster")
+        return key
+    
+    return None
+
+
 @app.on_event("startup")
 async def startup_event():
-    """Initialize database tables and configurations on startup"""
+    """Initialize database tables and vector search on startup"""
     try:
         conn = get_connection()
         create_token_tables(conn)
@@ -1294,6 +1445,38 @@ async def startup_event():
         logger.info("Database tables initialized successfully")
     except Exception as e:
         logger.warning(f"Error initializing database tables: {e}")
+    
+    # Auto-initialize vector search system (always enabled for vector-only mode)
+    if VECTOR_SEARCH_AVAILABLE:
+        try:
+            # Get Gemini API key
+            gemini_api_key = get_gemini_api_key()
+            
+            if not gemini_api_key:
+                logger.warning("Vector search: GEMINI_API_KEY not found. Add to appSetting.txt or TokenMaster table.")
+            else:
+                # Get Qdrant settings from environment
+                qdrant_host = os.getenv("QDRANT_HOST", "localhost")
+                qdrant_port = int(os.getenv("QDRANT_PORT", "6333"))
+                auto_sync = os.getenv("VECTOR_SEARCH_AUTO_SYNC", "false").lower() == "true"
+                
+                logger.info(f"Initializing vector search (Qdrant: {qdrant_host}:{qdrant_port})...")
+                
+                system = initialize_vector_search_system(
+                    gemini_api_key=gemini_api_key,
+                    qdrant_host=qdrant_host,
+                    qdrant_port=qdrant_port,
+                    auto_sync=auto_sync
+                )
+                
+                if system.is_ready:
+                    logger.info("Vector search system initialized successfully (vector-only mode)")
+                else:
+                    logger.warning("Vector search initialization incomplete - check Qdrant connection")
+                    
+        except Exception as e:
+            logger.warning(f"Vector search initialization failed: {e}")
+
 
 def process_invoice_sync(file_path: str, companyID: str, username: str, licenceID: str = None, connection_params: str = None):
     from fastapi import UploadFile
