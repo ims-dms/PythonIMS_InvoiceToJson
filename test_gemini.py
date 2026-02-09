@@ -20,7 +20,7 @@ def read_api_key_from_file(file_path='appSetting.txt'):
 GEMINI_API_KEY = read_api_key_from_file()
 
 provider = GoogleGLAProvider(api_key=GEMINI_API_KEY)
-model = GeminiModel('gemini-2.0-flash-lite', provider=provider)
+model = GeminiModel('gemini-2.5-pro', provider=provider)
 gemini_agent = Agent(model)
 
 async def test():

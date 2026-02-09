@@ -186,7 +186,7 @@ def get_gemini_model_and_api_key(company_id: str):
         })
     api_key = token_info.get('api_key')
     provider = GoogleGLAProvider(api_key=api_key)
-    model = GeminiModel('gemini-2.0-flash-lite', provider=provider)
+    model = GeminiModel('gemini-2.5-pro', provider=provider)
     return model, api_key, token_info
 
 PROCESSING_PROMPT = """
