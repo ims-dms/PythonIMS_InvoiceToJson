@@ -5,7 +5,7 @@ Test the new error handling and response formatting
 from fuzzy_matcher import format_api_response, minimize_error_message, api_error_response
 
 # Test 1: Minimizing the Gemini 429 error
-gemini_error = """Internal server error: status_code: 429, model_name: gemini-2.5-pro, body: {
+gemini_error = """Internal server error: status_code: 429, model_name: gemini-3-pro-preview, body: {
   "error": {
     "code": 429,
     "message": "Resource exhausted. Please try again later. Please refer to https://cloud.google.com/vertex-ai/generative-ai/docs/error-code-429 for more details.",

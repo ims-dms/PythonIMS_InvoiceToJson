@@ -12,7 +12,7 @@ error_response = {
     "status": "error",
     "message": "Error with the server: Resource limit exceeded. Please try again later.",
     "data": {
-        "actual_error": 'Internal server error: status_code: 429, model_name: gemini-2.5-pro, body: {\n  "error": {\n    "code": 429,\n    "message": "Resource exhausted. Please try again later. Please refer to https://cloud.google.com/vertex-ai/generative-ai/docs/error-code-429 for more details.",\n    "status": "RESOURCE_EXHAUSTED"\n  }\n}\n'
+        "actual_error": 'Internal server error: status_code: 429, model_name: gemini-3-pro-preview, body: {\n  "error": {\n    "code": 429,\n    "message": "Resource exhausted. Please try again later. Please refer to https://cloud.google.com/vertex-ai/generative-ai/docs/error-code-429 for more details.",\n    "status": "RESOURCE_EXHAUSTED"\n  }\n}\n'
     }
 }
 
