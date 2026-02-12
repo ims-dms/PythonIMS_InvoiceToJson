@@ -211,7 +211,7 @@ IMPORTANT MULTI-PAGE INSTRUCTIONS:
    - Customer Name → "dealer_name"
    - PWS Number → "pws_no"
    - Company Name (Vendor) → "company_name"
-   - Transaction Type (Mod Of payment) → "transaction_type"
+   - Transaction Type (Mode Of payment) → "transaction_type"
    - Transaction Date → "transaction_date"
    - Due Date → "due_date"
    - Invoice Miti → "invoice_miti"
