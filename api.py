@@ -299,10 +299,22 @@ IMPORTANT MULTI-PAGE INSTRUCTIONS:
      - Preserve negative signs shown for discount; do not convert to positive.
    - ABSOLUTELY NO ADDITIONAL TEXT OR MARKDOWN
 
+   CRITICAL NUMBER OUTPUT RULES FOR JSON:
+     * ALL numeric values (quantity, rate, discount, mrp, vat, altQty, sub_total, discount_total, taxable_value, vat_total, total_amount) MUST be output as plain JSON numbers WITHOUT any thousands separators.
+     * CORRECT: "rate": [1000.00, 2500.50, 150.75]
+     * WRONG:  "rate": [1,000.00, 2,500.50, 150.75]   ← commas break JSON!
+     * If the invoice shows "1,000.00" you must output 1000.00 in JSON (remove the comma).
+     * If the invoice shows "25,000" you must output 25000 in JSON.
+     * The decimal point (.) is ALWAYS a decimal separator. Never remove or alter decimal points.
+     * NEVER round or truncate numbers. If the invoice says 1000.00, output 1000.00 not 1000 or 1.0 or 10.0.
+     * NEVER divide numbers by any factor. The number on the invoice IS the correct number.
+
 IMPORTANT VERIFICATION - Before finalizing your response:
-   - Double-check the "rate" array: Each rate value should include ALL visible digits. Rates like 110.62 should NOT become 10.62.
+   - Double-check the "rate" array: Each rate value should include ALL visible digits. Rates like 110.62 should NOT become 10.62. Rates like 1000.00 should NOT become 1.0 or 10.0.
+   - Double-check the "quantity" array: If the invoice shows quantity "10", output 10, not 10000 or 0.01.
    - Double-check the "discount" array: If a Discount column exists in the invoice, extract the per-line discount values. Do NOT return all zeros if discounts are clearly visible.
    - Cross-verify: The "Amount" column (if present) should approximately equal Rate × Quantity - Discount for each row.
+   - Verify all JSON numeric values have NO commas as thousands separators.
 
 FINAL REMINDER: If multiple images were provided, ensure you have extracted products from EVERY SINGLE PAGE. Your product arrays (sku, quantity, rate, etc.) should contain entries from ALL pages combined, not just the first page.
 """
@@ -678,6 +690,54 @@ async def process_invoice(
                 if not json_str:
                     raise ValueError("No JSON found in Gemini response")
 
+                # Pre-process: strip thousands-separator commas from numeric values
+                # in JSON BEFORE parsing. This handles cases like "rate": [1,000.00]
+                # which would otherwise break JSON parsing or produce wrong values.
+                # Pattern: digit(s),digit{3} where comma is clearly a thousands separator
+                def strip_thousands_commas_in_json(s: str) -> str:
+                    """Remove commas used as thousands separators in numeric values within JSON.
+                    Carefully avoids modifying commas inside quoted strings or array/object separators."""
+                    # Match numbers like 1,000 or 12,345,678.90 that are NOT inside quotes
+                    # We process character by character to respect string boundaries
+                    result = []
+                    in_string = False
+                    escape = False
+                    i = 0
+                    while i < len(s):
+                        ch = s[i]
+                        if in_string:
+                            result.append(ch)
+                            if escape:
+                                escape = False
+                            elif ch == '\\':
+                                escape = True
+                            elif ch == '"':
+                                in_string = False
+                            i += 1
+                            continue
+                        if ch == '"':
+                            in_string = True
+                            result.append(ch)
+                            i += 1
+                            continue
+                        # Outside strings: look for thousands-comma pattern digit,digit{3}
+                        if ch == ',' and i > 0 and i + 3 < len(s):
+                            # Check if this comma is a thousands separator
+                            prev_char = s[i-1] if i > 0 else ''
+                            next_three = s[i+1:i+4]
+                            after_three = s[i+4] if i + 4 < len(s) else ''
+                            if (prev_char.isdigit() and 
+                                next_three.isdigit() and len(next_three) == 3 and
+                                (not after_three.isdigit())):
+                                # This is a thousands separator - skip the comma
+                                i += 1
+                                continue
+                        result.append(ch)
+                        i += 1
+                    return ''.join(result)
+
+                json_str = strip_thousands_commas_in_json(json_str)
+
                 try:
                     data = json.loads(json_str)
                 except json.JSONDecodeError as e1:
@@ -785,59 +845,56 @@ async def process_invoice(
                     return None
 
                 # Helper to safely parse individual numeric values from strings and mixed inputs
+                # RULES: comma (,) is ALWAYS a thousands separator, dot (.) is ALWAYS a decimal separator
+                # NEVER divide by 1000 or apply any heuristic that alters the numeric value.
+                # The value from Gemini/JSON is authoritative — preserve it exactly.
                 def parse_number_safe(value):
                     import re
                     try:
                         if value is None:
                             return 0
                         if isinstance(value, (int, float)):
-                            result = float(value)
-                            # Screen OCR correction: if number is divisible by 1000 (like 10000, 25000)
-                            # it may be misinterpreted "10.000" or "25.000" from screen photos
-                            if result >= 1000 and result % 1000 == 0 and result <= 100000:
-                                candidate = result / 1000.0
-                                if candidate >= 1 and candidate <= 999:  # Reasonable quantity/rate range
-                                    return candidate
-                            return result
-                        s = str(value)
-                        # OCR normalization: fix ambiguous leading characters commonly mistaken for digits
-                        # Example: 'I10.62' or 'l10.62' or '|10.62' should be treated as '110.62'
-                        s_norm = s
-                        # If a token starts with I/l/| followed by digits, convert the leading char to '1'
-                        s_norm = re.sub(r"\b[Il\|](?=\d)", "1", s_norm)
-                        # Sometimes 'O' may be used instead of '0' adjacent to digits
-                        s_norm = re.sub(r"(?<=\d)[Oo](?=\d)", "0", s_norm)
+                            # Trust the numeric value as-is from JSON parsing
+                            return float(value)
+                        s = str(value).strip()
+                        if not s:
+                            return 0
 
-                        # Extract first well-formed number token; keep decimals, strip thousands commas
-                        m = re.search(r"-?\d[\d,]*\.?\d*", s_norm)
-                        candidate_result = None
+                        # Step 1: Detect and handle comma-as-thousands vs comma-as-decimal
+                        # Pattern: digits,digits.digits  → comma is thousands separator (e.g., "1,000.00")
+                        # Pattern: digits.digits,digits  → comma is decimal separator (European, e.g., "1.000,00")
+                        # Pattern: digits,digits (no dot) → ambiguous, but treat comma as thousands if groups of 3
+
+                        # Check for European format: 1.000,00 (dot=thousands, comma=decimal)
+                        european_match = re.match(r'^-?(\d{1,3}(?:\.\d{3})+),(\d+)$', s)
+                        if european_match:
+                            # European format: dots are thousands, comma is decimal
+                            integer_part = european_match.group(0).split(',')[0].replace('.', '').lstrip('-')
+                            decimal_part = european_match.group(2)
+                            sign = '-' if s.startswith('-') else ''
+                            return float(f"{sign}{integer_part}.{decimal_part}")
+
+                        # Standard format: comma is thousands separator, dot is decimal
+                        # Remove all commas that act as thousands separators
+                        s_clean = s
+                        # Remove commas from numeric patterns like 1,000 or 12,345,678.90
+                        s_clean = re.sub(r'(\d),(?=\d{3}(?:[.,]|$|\D))', r'\1', s_clean)
+
+                        # Extract the first well-formed number
+                        m = re.search(r'-?\d+\.?\d*', s_clean)
                         if m:
-                            token = m.group(0)
                             try:
-                                candidate_result = float(token.replace(',', ''))
+                                return float(m.group(0))
                             except Exception:
-                                candidate_result = None
+                                pass
 
-                        # Secondary attempt: allow optional leading I/l/| inside the token and replace with '1'
-                        if candidate_result is None or (candidate_result < 20 and re.search(r"\b[Il\|]\d", s)):
-                            m2 = re.search(r"[Il\|]?\d[\d,]*\.?\d*", s)
-                            if m2:
-                                token2 = m2.group(0).replace('I', '1').replace('l', '1').replace('|', '1')
-                                try:
-                                    candidate2 = float(token2.replace(',', ''))
-                                    # Prefer candidate2 if it looks more reasonable for rate-like values
-                                    if candidate_result is None or candidate2 >= 20 > candidate_result:
-                                        candidate_result = candidate2
-                                except Exception:
-                                    pass
-
-                        if candidate_result is not None:
-                            # Apply the screen OCR thousands-separator correction if needed
-                            if candidate_result >= 1000 and candidate_result % 1000 == 0 and candidate_result <= 100000:
-                                candidate = candidate_result / 1000.0
-                                if candidate >= 1 and candidate <= 999:
-                                    return candidate
-                            return candidate_result
+                        # Fallback: try extracting any numeric-looking token from original string
+                        m2 = re.search(r'-?[\d,]+\.?\d*', s)
+                        if m2:
+                            try:
+                                return float(m2.group(0).replace(',', ''))
+                            except Exception:
+                                pass
                     except Exception:
                         pass
                     return 0
@@ -966,16 +1023,9 @@ async def process_invoice(
                 vat_list = [parse_number_safe(x) for x in vat_list]
                 altqty_list = [parse_number_safe(x) for x in altqty_list]
 
-                # Heuristic correction: if a rate looks unrealistically low and per-line discount exceeds it,
-                # it likely lost a leading '1' during OCR (e.g., 110.62 -> 10.62). Add 100 in such cases.
-                try:
-                    for i in range(min(len(rate_list), len(discount_list))):
-                        r = float(rate_list[i] or 0)
-                        d = float(discount_list[i] or 0)
-                        if r > 0 and r < 20 and d > r:
-                            rate_list[i] = r + 100.0
-                except Exception:
-                    pass
+                # NOTE: Previous heuristic that added +100 to low rates has been REMOVED.
+                # It caused incorrect values (e.g., 1,000.00 → 1.0 → 101.0).
+                # Gemini's extracted values are now trusted as-is without post-hoc manipulation.
                 
                 # Determine the number of product rows based on actual line-item fields
                 # Avoid using SNO length alone, because the model may output extra serial
